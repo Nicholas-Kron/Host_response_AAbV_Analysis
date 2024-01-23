@@ -1,0 +1,5021 @@
+---
+title: "Host Response to Aplysia Abyssovirus 1 in Nervous System and Gill"
+author: "Dr. Nicholas S. Kron"
+date: "2/9/2023"
+output:
+  html_document:
+    toc: true
+    theme: united
+    toc_depth: 4
+    number_sections: FALSE
+    
+---
+
+To The Reader:
+First and foremost, apologies for the ugly state of this code. There could have been much better optimization, the code could be 1/4 the size due to large amount of repeated code. It is laid out this way for better audit in case of future review of the methods and results of the associated publication. The document was built iteratively for exploratory analysis and is as much log/notebook as code. In this doc you will find all of the R code used to analysis the expression data from the associated publication and visualize the results. Not all of the following analysis and results made it into the final manuscript but is preserved here to illustrate the analysis process. Commenting is minimal and the document assumes basic literacy in data wrangling and visualization workflows with tidyverse. The document is laid out with headings to allow rapid navigation to specific pieces of the analysis. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1 Set up
+
+```{r load packAge_Trues, echo=FALSE, error=FALSE, message=FALSE, warning = FALSE}
+
+library(tximport)
+library(cowplot)
+library(sva)
+library(WGCNA)
+library(ComplexHeatmap)
+library(DESeq2)
+library(DEGreport)
+library(PCAtools)
+library(clusterProfiler)
+library(ggdendro)
+library(tibble)
+library(tidyverse)
+
+
+
+
+```
+
+### 1.1 loading metadata
+
+```{r, load metadata files, warning = FALSE, echo = FALSE, message=FALSE}
+
+#load(file = "../../data/rdata/metadata_ANV.R")
+metadata_AAbV <- read.delim("../../data/metadata/metadata_AAbV.txt", header = TRUE, sep = "\t")
+
+#In this metadata we have data from Greer et al 2018, Kron et al 2020, and Kron et al 2023
+#The data from these will be refered to as
+#Greer or Greer PVC from data from Greer 2018
+#Kron_PVC or PVC, and Kron_BSC or BSC from Kron 2020, two neuron types used in this study
+#Schmale_GILL or GILL, and Schmale_ABD or ABD for Kron 2023, where 
+#  gill and abdominal ganglion were sequence in the lab of Dr. Michael Schmale, a co-author
+
+metadata_AAbV <- metadata_AAbV %>% 
+  mutate(Viral_Load = log((Uniquely_mapped_reads_number_Virus/Number_of_input_reads * 1000000) + 1,10),
+         ID = ifelse(str_detect(Study_Nickname, "Schmale"), Library.Name,Run),
+         header = factor(paste0(SRA_Study,"\n",Tissue),
+                         levels = c(
+                           "SRP268155 \nBSC",
+                           "SRP268155 \nPVC",
+                           "SRP446535\nABD",
+                           "SRP446535\nGILL",
+                           "SRP136115 \nPVC"
+                         )
+                         ),           
+  )
+
+
+```
+
+### 1.2 plotting metadata
+
+```{r plot metadata,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE, fig.width=5, fig.height=5}
+
+p <- metadata_AAbV %>% 
+ggplot(., aes(x = header, y = Uniquely_mapped_reads_number_Genome / Number_of_input_reads)) +
+  geom_boxplot() 
+
+out <- ggplot_build(p)[["data"]][[1]][["outliers"]]
+
+plot_data <- metadata_AAbV %>%
+  mutate(
+    prop_unique = Uniquely_mapped_reads_number_Genome / Number_of_input_reads,
+    label = ifelse(
+      prop_unique %in% unlist(out),
+      Run,
+      NA
+    )
+  )
+
+i0 <- plot_data %>% 
+ ggplot(., aes(x = header, y = prop_unique, label = label)) +
+  geom_boxplot() +
+  geom_label_repel(size = 2.5) +
+  labs(y = "% Reads Uniquely Mapped to Aplysia Genome", x = "") +
+  theme_bw()
+ggsave(plot = i0,filename = "../../figures/pct_unique_alined.pdf",device = "pdf", width = 5, height = 4)
+
+
+metadata_AAbV %>% filter(study == "Kron 2020") %>%
+  ggplot(data =., aes(x = as.factor(Age_True), y = Viral_Load, fill = Tissue)) +
+  geom_boxplot()+
+  geom_point() +
+  facet_wrap(facets = ~Tissue, scales = "free")
+
+metadata_AAbV %>% filter(study == "Kron 2023") %>%
+  ggplot(data =., aes(x = as.factor(Age_True), y = Viral_Load, fill = Tissue)) +
+  geom_boxplot() +
+  geom_point() +
+  facet_wrap(facets = ~Tissue, scales = "free")
+
+metadata_AAbV %>% filter(study == "Greer 2018") %>%
+  ggplot(data =., aes(x = as.factor(Age_True), y = Viral_Load, fill = Tissue)) +
+  geom_boxplot()
+
+
+metadata_AAbV %>%
+  ggplot(data =., aes(x = Study_Nickname, y = Viral_Load)) +
+  geom_point() 
+
+metadata_AAbV %>%
+  ggplot(data =., aes(x = Study_Nickname, y = Uniquely_mapped_reads_number_Virus/Number_of_input_reads)) +
+  geom_point() +
+  scale_y_continuous(breaks= c(0.01:.1, seq(.1,1,.1)))
+
+
+lapply(unique(metadata_AAbV$Study_Nickname), function(x){
+  
+  dat <- metadata_AAbV %>% filter(Study_Nickname == x)
+  cor(dat$Age_True, dat$Viral_Load,method = "pearson")
+  
+})
+
+
+metadata_AAbV %>%
+  mutate(header = paste0(SRA_Study,"\n", Tissue)) %>%
+  ggplot(data =., aes(x = Age_True, y = Viral_Load)) +
+  geom_point() +
+  geom_vline(xintercept =c(9,11),linetype = 3) +
+  geom_smooth(se = FALSE, method = "lm") +
+  facet_wrap(facets = ~header) +
+  labs(y = "log10 vCPM", x = "Age (months)")+
+  theme_bw()
+
+
+
+library("ggpubr")
+
+metadata_AAbV %>%
+ggscatter(., x = "Age_True", y = "Viral_Load", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Age (months)", ylab ="log10 vCPM") +
+  geom_vline(xintercept =c(9,11),linetype = 3) +
+  facet_wrap(facets = ~header, ncol = 2, scales = "free_y") +
+  theme_bw()
+ggsave("../../figures/viral_load_x_age.pdf",device = "pdf", width = 5, height = 6)
+
+
+metadata_AAbV %>% ggplot(aes(x = Uniquely_mapped_reads_number_Genome / Number_of_input_reads, y = Viral_Load, label = ID)) +
+  geom_label()+
+  facet_wrap(facets = ~Study_Nickname)
+
+```
+
+
+### 1.3 prep datasets from metadata
+
+```{r prepare file lists,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+Kron <- (metadata_AAbV %>% filter(study == "Kron 2020"))$Run
+Kron_BSC_meta <- (metadata_AAbV %>% filter(Tissue == "BSC" & study == "Kron 2020"))
+Kron_PVC_meta <- (metadata_AAbV %>% filter(Tissue == "PVC" & study == "Kron 2020"))
+Greer_PVC_meta <- (metadata_AAbV %>% filter(Tissue == "PVC" & study == "Greer 2018"))
+Schmale_GILL_meta <- (metadata_AAbV %>% filter(Tissue == "GILL" & study == "Kron 2023"))
+Schmale_ABD_meta <- (metadata_AAbV %>% filter(Tissue == "ABD" & study == "Kron 2023"))
+
+
+#set file list
+dir="../../data/quants"
+
+Kron_files <- file.path(dir,paste0(Kron, "_quant.sf"))
+names(Kron_files) <- Kron
+
+Kron_BSC_files<- file.path(dir,paste0(Kron_BSC_meta$Run, "_quant.sf"))
+names(Kron_BSC_files) <- Kron_BSC_meta$Run
+
+Kron_PVC_files<- file.path(dir,paste0(Kron_PVC_meta$Run, "_quant.sf"))
+names(Kron_PVC_files) <- Kron_PVC_meta$Run
+
+Greer_PVC_files<- file.path(dir,paste0(Greer_PVC_meta$Run, "_quant.sf"))
+names(Greer_PVC_files) <- Greer_PVC_meta$Run
+
+Schmale_GILL_files<- file.path(dir,paste0(Schmale_GILL_meta$Library.Name, "_quant.sf"))
+names(Schmale_GILL_files) <- Schmale_GILL_meta$Library.Name
+
+
+Schmale_ABD_files<- file.path(dir,paste0(Schmale_ABD_meta$Library.Name, "_quant.sf"))
+names(Schmale_ABD_files) <- Schmale_ABD_meta$Library.Name
+
+
+```
+
+### 1.4 prepare tx2gene
+
+```{r build tx2gene,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+tx2gene <- read.delim("../../data/annotation_data/GCF_000002075.1_AplCal3.0_genomic.gff",
+           skip = 8, comment.char = "#", sep = "\t", header = FALSE) %>%
+  filter(V3 %in% c("mRNA","tRNA","rRNA", "lnc_RNA",
+                   "snRNA", "snoRNA","guide_RNA")) %>%
+  select(V9) %>%
+  mutate(tx = str_extract(V9, "ID=rna-[aA-zZ,0-9 ., -]+") %>%
+           str_remove("ID="),
+         gene = str_extract(V9, "Parent=gene-[aA-zZ,0-9 ., -]+") %>%
+           str_remove("Parent=")) %>%
+  select(tx,gene)
+
+tx2gene <- tx2gene %>% filter(! str_detect(tx,"[.][0-9]-2"))
+
+
+```
+
+### 1.5 look for outliers in PCA
+
+```{r check for outliers using PCA, echo=FALSE, warning=FALSE,message=FALSE,error=FALSE, fig.height=7, fig.width=4}
+
+
+outlier_plot <- function(dds){
+  U <-  plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000, returnData = TRUE)[,1:2]
+Mahalanobis <- bigutilsr::covRob(as.matrix(U), estim = "pairwiseGK")$dist
+p <- qplot(1, Mahalanobis, geom = "boxplot") +
+  geom_hline(yintercept = bigutilsr::tukey_mc_up(Mahalanobis), color = "red") +
+  geom_label_repel(label = 
+                     lapply(names(Mahalanobis), function(x){ifelse(Mahalanobis[x] >bigutilsr::tukey_mc_up(Mahalanobis), x, NA)}) %>% unlist()
+                     ) +
+  labs(y = "Robust Mahalanobis distance", x = "") +
+  theme_classic() + theme(aspect.ratio = 1)
+return(p)
+}
+
+txi_Kron_BSC<- tximport( importer=read.delim, Kron_BSC_files, type = "salmon", tx2gene = tx2gene)
+dds <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~Age_True + Viral_Load)
+dds <- DESeq2::estimateSizeFactors(dds)
+i1 <- plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000) +
+  stat_ellipse(level = 0.99, type = "t") +
+  labs(color = "Age") +
+  theme_bw() + theme(aspect.ratio = 1)
+i1.5 <- outlier_plot(dds)
+
+txi_Kron_PVC<- tximport( importer=read.delim, Kron_PVC_files, type = "salmon", tx2gene = tx2gene)
+dds <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~Age_True + Viral_Load)
+dds <- DESeq2::estimateSizeFactors(dds)
+i2 <- plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000) +
+  stat_ellipse(level = 0.99, type = "t") +
+  labs(color = "Age") +
+  theme_bw() + theme(aspect.ratio = 1)
+i2.5 <- outlier_plot(dds)
+
+
+ txi_Schmale_ABD<- tximport( importer=read.delim, Schmale_ABD_files, type = "salmon", tx2gene = tx2gene)
+dds <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~Age_True + Viral_Load)
+dds <- DESeq2::estimateSizeFactors(dds)
+i3 <-plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000) + 
+  stat_ellipse(level = 0.99, type = "t") +
+  geom_label_repel(aes(label = ifelse(name %in% 
+                                        c("23B27L", "16B27A","13B27A","20B27A"),name,""))) +
+  labs(color = "Age") +
+  theme_bw() + theme(aspect.ratio = 1)
+i3.5 <- outlier_plot(dds)
+
+txi_Schmale_GILL<- tximport( importer=read.delim, Schmale_GILL_files, type = "salmon", tx2gene = tx2gene)
+dds <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~Age_True + Viral_Load)
+dds <- DESeq2::estimateSizeFactors(dds)
+i4 <- plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000) + 
+  stat_ellipse(level = 0.99, type = "t") +
+  geom_label_repel(aes(label = ifelse(name %in% 
+                                        c("23B27L", "16B27A","13B27A","20B27A"),name,""))) +
+  labs(color = "Age") +
+  theme_bw() + theme(aspect.ratio = 1)
+i4.5 <- outlier_plot(dds)
+
+txi_Greer_PVC<- tximport( importer=read.delim, Greer_PVC_files, type = "salmon", tx2gene = tx2gene)
+dds <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~Age + Viral_Load)
+dds <- DESeq2::estimateSizeFactors(dds)
+i5 <- plotPCA(vst(dds), intgroup = "Age_True", ntop = 1000) +
+  stat_ellipse(level = 0.99, type = "t") +
+  labs(color = "Age") +
+  theme_bw() + theme(aspect.ratio = 1)
+i5.5 <- outlier_plot(dds)
+
+i <- cowplot::plot_grid(plotlist = list(i1, i1.5,i2, i2.5,i3, i3.5,i4, i4.5,i5,i5.5),labels = "AUTO", align="hv", axis="tbl", ncol =2, scale = 0.95)
+i
+cowplot::save_plot(filename = "../../figures/outlier_pca.pdf",plot = i, base_asp = 1, ncol = 2, base_height = 12, base_width = 4)
+
+```
+
+```{r remove outliers, echo=FALSE, warning=FALSE,message=FALSE,error=FALSE}
+
+##remove outliers due to low host unique pct aligned for dataset
+metadata_AAbV <- metadata_AAbV %>%
+  filter(! Run %in% c("SRR6871219","SRR12061229") ) %>%
+  filter(! Library.Name %in% c("13B27A") )
+
+##remove aditional outliers determined by PCA analysis
+metadata_AAbV <- metadata_AAbV %>%
+  filter(! Library.Name %in% c("20B27A","16B27A","23B27L") )
+
+metadata_AAbV %>%
+  mutate(header = paste0(SRA_Study,"\n", Tissue)) %>%
+  ggplot(data =., aes(x = Age_True, y = Viral_Load)) +
+  geom_point() +
+  geom_vline(xintercept =c(9,10),linetype = 3) +
+  geom_smooth(se = FALSE) +
+  facet_wrap(facets = ~header) +
+  theme_bw()
+
+# metadata_AAbV %>% filter(Library.Name %in% c("13B27A","20B27A","16B27A","23B27L")) %>% select(Run, Library.Name)
+
+##rebuild metadata 
+
+Kron_BSC_meta <- (metadata_AAbV %>% filter(Tissue == "BSC" & study == "Kron 2020"))
+Kron_PVC_meta <- (metadata_AAbV %>% filter(Tissue == "PVC" & study == "Kron 2020"))
+Greer_PVC_meta <- (metadata_AAbV %>% filter(Tissue == "PVC" & study == "Greer 2018"))
+Schmale_GILL_meta <- (metadata_AAbV %>% filter(Tissue == "GILL" & study == "Kron 2023"))
+Schmale_ABD_meta <- (metadata_AAbV %>% filter(Tissue == "ABD" & study == "Kron 2023"))
+
+##rebuild files
+#set file list
+dir="../../data/quants"
+
+Kron_files <- file.path(dir,paste0(Kron, "_quant.sf"))
+names(Kron_files) <- Kron
+
+Kron_BSC_files<- file.path(dir,paste0(Kron_BSC_meta$Run, "_quant.sf"))
+names(Kron_BSC_files) <- Kron_BSC_meta$Run
+
+Kron_PVC_files<- file.path(dir,paste0(Kron_PVC_meta$Run, "_quant.sf"))
+names(Kron_PVC_files) <- Kron_PVC_meta$Run
+
+Greer_PVC_files<- file.path(dir,paste0(Greer_PVC_meta$Run, "_quant.sf"))
+names(Greer_PVC_files) <- Greer_PVC_meta$Run
+
+Schmale_GILL_files<- file.path(dir,paste0(Schmale_GILL_meta$Library.Name, "_quant.sf"))
+names(Schmale_GILL_files) <- Schmale_GILL_meta$Library.Name
+
+
+Schmale_ABD_files<- file.path(dir,paste0(Schmale_ABD_meta$Library.Name, "_quant.sf"))
+names(Schmale_ABD_files) <- Schmale_ABD_meta$Library.Name
+
+```
+
+### 1.6 prepare data and functions for immune enrichment
+
+```{r define function to name clusters according to their expression trend, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+name_clusters <- function(clusts, expr, meta, identifier){
+  
+  dat <- expr %>%
+    t() %>% scale() %>% t() %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,clusts) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = identifier, values_to = "expr") %>%
+  inner_join(., meta %>% select(Viral_Load, identifier)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+  clust_names <- lapply(unique(dat$clust), FUN = function(x){
+    sub_dat <- dat %>% filter(clust == x) %>% select(Viral_Load, mean)
+    mod <- lm(data = sub_dat, formula = Viral_Load ~ mean)
+    clust_name <- data.frame(clust = x, slope = mod$coefficients[[2]], direction = ifelse(mod$coefficients[[2]] >0, "UP","DOWN"))
+  }) %>% do.call("rbind",.)
+  inner_join(clusts,clust_names)
+}
+
+
+```
+
+
+```{r load immune annotations, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+immune_annot <- read.delim("../../data/annotation_data/AcIPS_Immunome.txt")
+immune_genes <- immune_annot %>% select(-Protein_accessions, - Gene_count, -Protein_count) %>%
+  separate_longer_delim(., cols = Gene_accessions, delim = ", ")
+
+```
+
+```{r define function to do chi-square enrichment test, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+enrich_immune <- function(res, gene_list, immune, return_table = FALSE){
+  full_set = res %>% rownames() %>% str_remove(.,"gene-")
+  cluster_set = gene_list
+  not_cluster_set = full_set[!full_set %in% cluster_set]
+  immune_set = immune_genes$Gene_accessions
+  immune_cluster = sum(cluster_set %in% immune_set)
+  not_immune_cluster = sum(! cluster_set %in% immune_set)
+  immune_not_cluster = sum(not_cluster_set %in% immune_set)
+  not_immune_not_cluster = sum(! not_cluster_set %in% immune_set)
+  contingency = 
+      matrix(
+        c(
+          immune_cluster,immune_not_cluster,
+          not_immune_cluster, not_immune_not_cluster
+        ), nrow= 2, ncol = 2
+        
+    )
+  rownames(contingency) <- c("Set", "!Set")
+  colnames(contingency) <- c("Immune", "!Immune")
+  test<- chisq.test(contingency)
+  df <- data.frame(full_set =length(full_set),
+           cluster_set=length(cluster_set),
+           immune_set=length(immune_set),
+           immune_cluster=immune_cluster,
+          not_immune_cluster=not_immune_cluster,
+          immune_not_cluster=immune_not_cluster,
+          not_immune_not_cluster=not_immune_not_cluster,
+          statistic = test$statistic,
+          p.value= test$p.value) %>% rownames_to_column("test")
+  if(return_table == TRUE){
+    return(list(contingency, df))
+  }
+  else{
+    return(df)
+  }
+}
+
+```
+
+```{r define function to plot chi-square enrichment test, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+enrich_immune_plot <- function(res, gene_list, immune, return_table = FALSE, set_title = "", correct_n = 1){
+  full_set = res %>% rownames() %>% str_remove(.,"gene-")
+  cluster_set = gene_list
+  not_cluster_set = full_set[!full_set %in% cluster_set]
+  immune_set = immune_genes$Gene_accessions
+  immune_cluster = sum(cluster_set %in% immune_set)
+  not_immune_cluster = sum(! cluster_set %in% immune_set)
+  immune_not_cluster = sum(not_cluster_set %in% immune_set)
+  not_immune_not_cluster = sum(! not_cluster_set %in% immune_set)
+  contingency = 
+      matrix(
+        c(
+          immune_cluster,immune_not_cluster,
+          not_immune_cluster, not_immune_not_cluster
+        ), nrow= 2, ncol = 2
+        
+    )
+  rownames(contingency) <- c("Set", "!Set")
+  colnames(contingency) <- c("Immune", "!Immune")
+  test<- chisq.test(contingency)
+  list(test$observed,
+  test$expected,
+  test$residuals,
+  test$data.name)
+  
+  df <- data.frame(
+    immune = rep(c(rep("Immune",2),rep(("Not Immune"),2)),2),
+    cluster = c(rep("Cluster",4), rep ("Not Cluster",4)),
+    type = rep(c("Observed","Expected"),4),
+    count = c(
+      test$observed[1,1],test$expected[1,1],
+      test$observed[1,2],test$expected[1,2],
+      test$observed[2,1],test$expected[2,1],
+      test$observed[2,2],test$expected[2,2]
+    ),
+    residuals = c(
+      test$residuals[1,1],test$residuals[1,1],
+      test$residuals[1,2],test$residuals[1,2],
+      test$residuals[2,1],test$residuals[2,1],
+      test$residuals[2,2],test$residuals[2,2]
+    )
+    ) 
+  
+  p <- df %>%
+    ggplot(., aes(x = type, y = count, fill = residuals, label = round(count,0)))+
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_label(vjust = 0.5, color = "black", fontface = "bold", fill = "white") +
+    facet_grid(rows = vars(cluster), 
+               cols = vars(immune), 
+               scales = "free",
+               switch = "y") +
+      theme_bw() +
+      scale_fill_gradient2(low = "cornflowerblue", mid = "grey50", high = "tomato", midpoint = 0,
+                           limits = c(
+                            -1* max( 6,ceiling(max(test$residuals) )),
+                           max( 6, ceiling(max(test$residuals)))
+                           )
+                           ) +
+      labs(title = paste0(set_title, ", ",
+                          "N =",length(full_set),", ",
+                          "df= ", test$parameter, ",\n",
+                          "Χ","\u00B2","= ",round(test$statistic,1), ", ",
+                          "p= ", format(test$p.value,scientific = TRUE,digits = 2),", ",
+                          "p.adj= ",  format(p.adjust(test$p.value,method = "BH",n = correct_n),
+                                             scientific = TRUE,digits = 2))
+            )
+  return(p)
+}
+
+```
+
+
+### 1.7 prepare data and functions for KEGG enrichments
+
+```{r load KEGG orthology data and build mapping file, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+load("../../data/rdata/annot.R")
+
+
+gene2ko <- tx2gene %>% mutate(tx = str_remove(tx, "rna-"),
+                   tx = str_remove(tx,"[.][1-3]")
+                   ) %>%
+  inner_join(.,Tx2Prot2Kegg %>% rowwise() %>% mutate(tx  = str_remove(tx,"[.][1-3]")))%>%
+  unique() %>%
+select(gene, ko) %>% unique() %>% filter(ko != "")
+
+
+```
+
+
+
+## 2 Differential Expression Kron 2020 BSC
+
+### 2.1 import read data and clean
+
+```{r import read data and clean BSC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=4}
+
+txi_Kron_BSC<- tximport( importer=read.delim, Kron_BSC_files, type = "salmon", tx2gene = tx2gene)
+Kron_BSC_meta <- metadata_AAbV %>% filter(study == "Kron 2020" & Tissue == "BSC")
+
+Kron_BSC_TPM <- txi_Kron_BSC$abundance
+
+filt <- Kron_BSC_TPM %>% as.data.frame() %>% 
+  rownames_to_column("tx") %>% 
+  pivot_longer(cols = -tx, names_to = "Run", values_to = "TPM") %>%
+  inner_join(., Kron_BSC_meta %>% select(Age, Run) ) %>%
+  group_by(Age, tx) %>%
+  summarise(min = sum(TPM >=1)) %>% 
+  ungroup()%>%
+  group_by(tx) %>%
+  summarise( num = sum(min >=3)) %>%
+  filter( num >= 3) %>%
+  select(tx) # 10.770
+
+```
+
+### 2.2 surrogate variable analysis BSC
+
+#### 2.2.1 sva calculation
+
+```{r surrogate variable analysis BSC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~Age_True + Viral_Load)
+dds.BSC <- DESeq2::estimateSizeFactors(dds.BSC)
+counts <- counts(dds.BSC, normalized = TRUE)
+#counts <- counts[which(rowSums(counts) > 0),]
+counts <- counts[filt$tx,]
+
+mod <- model.matrix(~Age_True + Viral_Load , data=Kron_BSC_meta)
+mod0 <- model.matrix(~Age_True, data=Kron_BSC_meta)
+svnum <- num.sv(counts, mod, method = "be") 
+svnum
+svobj <- svaseq(counts, mod, mod0, n.sv = svnum)
+#num sv is 2
+Kron_BSC_meta$sv1 = svobj$sv[,1]
+Kron_BSC_meta$sv2 = svobj$sv[,2]
+
+##incorporate SVs into model
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~sv1 + sv2 + Age_True + Viral_Load)
+dds.BSC <- dds.BSC[filt$tx,]
+vsd.BSC <- assay(vst(dds.BSC))
+```
+
+#### 2.2.2 sva visualization
+
+```{r surrogate variable figs BSC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+BSC_pc1 <- DESeq2::plotPCA(vst(dds.BSC, blind = FALSE), intgroup = "sv1", ntop = 1000) +
+  scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+  labs(color = "Surrogate\nVariable")
+BSC_pc2 <- DESeq2::plotPCA(vst(dds.BSC,blind = FALSE), intgroup = "Age_True", ntop = 1000) + labs(color = "Age_True (months)")
+BSC_pc3 <- DESeq2::plotPCA(vst(dds.BSC,blind = FALSE), intgroup = "Viral_Load", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "Viral Load\n log10 CPM")
+
+
+Kron_BSC_meta <- Kron_BSC_meta %>%
+  inner_join(. ,DESeq2::plotPCA(vst(dds.BSC,blind = FALSE), intgroup = "sv1", return = TRUE) %>%
+  as.data.frame() %>% rownames_to_column("Run") %>%
+  select(Run, PC1, PC2) )
+
+BSC_cors <- cor(Kron_BSC_meta %>% select(PC1, PC2, sv1, Age_True, Viral_Load))
+BSC_cors_p <- corPvalueFisher(BSC_cors, nrow(Kron_BSC_meta))
+textMatrix_BSC = paste(signif(BSC_cors, 2), "\n(",
+signif(BSC_cors_p, 1), ")", sep = "");
+dim(textMatrix_BSC) = dim(BSC_cors)
+BSC_cors <- BSC_cors[c(1,2),c(3,4,5)]
+textMatrix_BSC <- textMatrix_BSC[c(1,2),c(3,4,5)]
+
+mat_BSC <- Heatmap(matrix = BSC_cors,
+        cell_fun = function(j,i,x,y,width,height,fill){
+          grid.text(textMatrix_BSC[i,j],x =x , y =y, gp = gpar(fontsize = 12))
+        },
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        name = "Pearson\ncorrelation",
+        column_names_side = "top",
+        column_names_rot = 0, column_names_centered = TRUE)
+BSC_pc4 <- grid.grabExpr(draw(mat_BSC, padding = unit(c(1,1,0.5,0.5),"cm") ) )
+
+plot_grid(plotlist = list(BSC_pc1,BSC_pc2,BSC_pc3,BSC_pc4), 
+          ncol = 2, labels = c("A","B","C","D"))
+
+ggsave2(filename = "../../figures/Kron_PCAandDE.pdf", device = "pdf", width = 7, units = "in", dpi = 300)
+ggsave2(filename = "../../figures/Kron_PCAandDE.tiff", device = "tiff", width = 7, units = "in", dpi = 300)
+
+
+
+```
+
+#### 2.2.3 sva-corrected PCA
+
+```{r PCAtools BSC, fig.width=7, fig.height=4, ,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+library(ppclust)
+
+vst <- assay(vst(dds.BSC,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Kron_BSC_meta[,c("sv1","sv2")] )
+#mat <- vst
+
+horn <- parallelPCA(mat)
+#horn$n
+# 4
+  
+p <- PCAtools::pca(mat, metadata = Kron_BSC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+elbow <- findElbowPoint(p$variance)
+#elbow
+# 4
+
+
+screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+
+    geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -1, size = 8))
+
+ biplot(p,
+    lab = paste0(p$metadata$Age_True, 'months'),
+    colby = 'Viral_Load',
+    hline = 0, vline = 0,
+    legendPosition = 'right') +
+    scale_colour_gradient(low = 'blue', high = 'red2')
+ 
+eigencorplot(p,
+    components = getComponents(p, 1:horn$n),
+    metavars = c('Number_of_input_reads','Uniquely_mapped_reads_number_Genome','Age_True',
+      'Viral_Load'),
+    col = c('darkblue', 'blue2', 'black', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'Trait correlations',
+    colFrame = 'white',
+        plotRsquared = FALSE)
+
+
+eigencorplot(p,
+    components = getComponents(p, 1:5),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+```
+
+```{r pre and post PC correlations BSC }
+
+
+vst <- assay(vst(dds.BSC,blind = FALSE))
+
+vst <- assay(vst(dds.BSC,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Kron_BSC_meta[,c("sv1", "sv2")] )
+
+p1 <- PCAtools::pca(vst, metadata = Kron_BSC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+p2 <- PCAtools::pca(mat, metadata = Kron_BSC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+
+PCA_BSC_pre <- eigencorplot(p1,
+    components = getComponents(p1, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load', "sv1","sv2"),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = 'bottom',
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'pre correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_BSC_post <- eigencorplot(p2,
+    components = getComponents(p2, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = "bottom",
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'post correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_BSC <- cowplot::plot_grid(plotlist = list(PCA_BSC_pre,PCA_BSC_post))
+
+
+```
+
+
+### 2.3 Differential expression LRT BSC
+
+```{r DE analysis in BSC,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~sv1 + sv2 + Age_True + Viral_Load)
+dds.BSC <- dds.BSC[filt$tx,]
+dds.BSC <- DESeq(dds.BSC, reduced = ~sv1 + sv2 +Age_True, test = "LRT")
+res <- results(dds.BSC, alpha = 0.01)
+summary(res)
+res.BSC_virus <- as.data.frame(res)
+count.BSC <- counts(dds.BSC, normalized = TRUE)
+vsd.BSC <- vst(dds.BSC)
+
+##get sig DE genes at p <= 0.01
+sig.BSC <-  rownames(res.BSC_virus %>% as.data.frame() %>% rownames_to_column("gene") %>% filter(padj <=0.01) %>% arrange(padj) %>% column_to_rownames("gene") )
+
+
+```
+
+### 2.4 Cluster DE genes Kron BSC
+
+#### 2.4.1 heirarchical cluster
+
+```{r heirarchical cluster BSC, echo=FALSE, message=FALSE, warning = FALSE, error = FALSE}
+
+library(e1071)
+library(factoextra)
+library(NbClust)
+
+
+viral_order = (Kron_BSC_meta %>% select(Run, Viral_Load) %>% arrange(Viral_Load))$Run
+
+#df <- as.data.frame(count.BSC) 
+df <- assay(vsd.BSC) 
+DEgenes <- df[sig.BSC,]
+scaled <- df 
+corrected.BSC <- limma::removeBatchEffect(x = scaled, covariates = Kron_BSC_meta[,c("sv1","sv2")])
+scaledata.BSC<- corrected.BSC[sig.BSC,viral_order] %>% t %>% scale %>% t 
+
+BSC_c1 <- factoextra::fviz_nbclust(x = scaledata.BSC, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.BSC), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+geneTree = as.dendrogram(hr, method="average")
+# plot(geneTree,
+#      leaflab = "none",             
+#      main = "Gene Clustering",
+#      ylab = "Height")
+hclustk2 = cutree(hr, k=2)
+clusters <- hclustk2
+BSC_c2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+```
+
+#### 2.4.2 DE gene PCA
+
+```{r PCA of DE genes BSC, echo=FALSE, message=FALSE, warning = FALSE}
+
+pca.BSC <- prcomp(scaledata.BSC,scale = FALSE, center = FALSE)
+clusters.BSC <- prcomp(scaledata.BSC,scale = FALSE, center = FALSE)[[5]][,1:2] %>% as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(data.frame(tx = names(clusters), clust = clusters))
+BSC_c3 <- clusters.BSC %>%
+# prcomp(df) %>%
+  ggplot(data =., aes(x = PC1, y = PC2, color = as.character(clust ))) + 
+  geom_point() +
+  labs(x = paste0("PC1 (", round(summary(pca.BSC)$importance[2,1]*100,1), "%)"),
+       y= paste0("PC2 (", round(summary(pca.BSC)$importance[2,2]*100,1), "%)"),
+       color = "Cluster")+
+    scale_color_manual(labels = c("1", "2"), 
+                     values = c("cornflowerblue", "tomato"),
+                     guide = guide_legend(override.aes = list(size = 5) )) +
+    theme(legend.position="top")
+
+```
+
+#### 2.4.3 plot clusters scaled expression BSC
+
+```{r plot clusters scaled expression BSC, echo=FALSE, message=FALSE, warning = FALSE}
+
+test <- scaledata.BSC %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,data.frame(tx = names(clusters), clust = clusters)) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_BSC_meta %>% select(Viral_Load, Run)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+labels <- clusters.BSC %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+BSC_c4 <- test %>%
+  ggplot(data = ., aes(x =Viral_Load, y = mean)) +
+  #geom_line(aes(x = Viral_Load, y = mean + 2*sd), linetype = "longdash") +
+  #geom_line(aes(x = Viral_Load, y = mean - 2*sd), linetype = "longdash") +
+  # geom_rect(aes(xmin = Viral_Load, ymax = mean + 2*sd,
+  #                  xmax = Viral_Load, ymin = mean + 2*sd)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Viral_Load), 
+                                  test$Viral_Load),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  #geom_smooth(method = "glm") +
+  geom_point(aes(x = Viral_Load, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 2, y = 3)+
+  #geom_line(data = test2, aes(x = Viral_Load, y = expr, group = tx), alpha = 0.05)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load\nlog10 CPM", y = "Scaled Expression")
+
+
+
+```
+
+#### 2.4.4 combined cluster plot BSC
+
+```{r cluster DE genes in Kron BSC, fig.width=7, fig.height= 7,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+plot_grid(plotlist = list(BSC_c1,BSC_c2,BSC_c3,BSC_c4), ncol = 2, labels = c("A","B","C","D")) 
+
+```
+
+#### 2.4.5 compare hc against fcm and km
+
+```{r cluster genes Kron BSC,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+library(ppclust)
+km.BSC <- kmeans(scaledata.BSC, centers = 2)
+fcm.BSC <- fcm(scaledata.BSC, centers = 2)
+
+clusts <- full_join(data.frame(gene = names(km.BSC$cluster),km.clust = km.BSC$cluster),
+                data.frame(gene = rownames(fcm.BSC$u), fcm.clust = fcm.BSC$cluster)
+                ) %>%
+  full_join(clusters.BSC %>% select(tx, clust) %>% rename(gene = tx, hc.clust = clust))
+
+
+```
+
+
+### 2.4.6 compare viral load to other parameters
+
+```{r all Kron BSC variable comparison,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+print("DE Age_True")
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~sv1 + sv2 + Viral_Load + Age_True )
+dds.BSC <- dds.BSC[filt$tx,]
+dds.BSC <- DESeq(dds.BSC, reduced = ~sv1 + sv2 + Viral_Load, test = "LRT")
+res <- results(dds.BSC, alpha = 0.01)
+summary(res)
+res.BSC_Age_True <- as.data.frame(res)
+
+print("DE Virus:Age_True")
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~sv1 + sv2 +Viral_Load + Age_True + Viral_Load:Age_True )
+dds.BSC <- dds.BSC[filt$tx,]
+dds.BSC <- DESeq(dds.BSC, reduced = ~sv1 + sv2 + Viral_Load + Age_True, test = "LRT")
+res <- results(dds.BSC, alpha = 0.01)
+summary(res)
+res.BSC_Age_TrueVirus <- as.data.frame(res)
+
+# setdiff(
+# res.BSC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.BSC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# 38
+
+# setdiff(
+#   res.BSC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.BSC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# 22
+
+de_test.BSC <-data.frame(
+  Explanatory_Variable = c("log10 Virus TPM", "Age_True", "Virus:Age_True interaction"),
+  P05 =c(
+        res.BSC_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.BSC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.BSC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow()
+  ),
+  P01 =c(
+        res.BSC_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.BSC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.BSC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow()
+  )
+) 
+
+de_test.BSC %>% pivot_longer(data =., cols = c(P05, P01), names_to = "signif", values_to = "count") %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = signif)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(x = Explanatory_Variable, y = count, label = count), position = position_dodge(width = 0.9))
+ggsave(filename = "../figures/BSC_DE_by_variable.pdf", width = 6, height = 4, device = "pdf")
+
+```
+
+
+## 3 Differential Expression Kron 2020 PVC
+
+### 3.1 import read data and clean
+
+```{r import read data and clean PVC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+
+Kron_PVC_meta <- metadata_AAbV %>% filter(study == "Kron 2020" & Tissue == "PVC")
+txi_Kron_PVC<- tximport( importer=read.delim, Kron_PVC_files, type = "salmon", tx2gene = tx2gene)
+
+Kron_PVC_TPM <- txi_Kron_PVC$abundance
+
+filt <- Kron_PVC_TPM %>% as.data.frame() %>% 
+  rownames_to_column("tx") %>% 
+  pivot_longer(cols = -tx, names_to = "Run", values_to = "TPM") %>%
+  inner_join(., Kron_PVC_meta %>% select(Age, Run) ) %>%
+  group_by(Age, tx) %>%
+  summarise(min = sum(TPM >=1)) %>% 
+  ungroup()%>%
+  group_by(tx) %>%
+  summarise( num = sum(min >=3)) %>%
+  filter( num >= 3) %>%
+  select(tx) # 10.770
+
+```
+
+### 3.2 surrogate variable analysis PVC
+
+#### 3.2.1 sva calculation
+
+```{r surrogate variable analysis PVC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~Age_True + Viral_Load)
+dds.PVC <- DESeq2::estimateSizeFactors(dds.PVC)
+counts <- counts(dds.PVC, normalized = TRUE)
+#counts <- counts[which(rowSums(counts) > 0),]
+counts <- counts[filt$tx,]
+
+mod <- model.matrix(~Age_True + Viral_Load , data=Kron_PVC_meta)
+mod0 <- model.matrix(~Age_True, data=Kron_PVC_meta)
+svnum <- num.sv(counts, mod, method = "be") 
+svnum
+svobj <- svaseq(counts, mod, mod0, n.sv = svnum)
+#num sv is 1
+Kron_PVC_meta$sv1 = svobj$sv[,1]
+
+##incorporate SVs into model
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~sv1 + Age_True + Viral_Load)
+dds.PVC <- dds.PVC[filt$tx,]
+vsd.PVC <- assay(vst(dds.PVC))
+
+```
+
+#### 3.2.2 sva visualization
+
+```{r surrogate variable figs PVC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+PVC_pc1 <- DESeq2::plotPCA(vst(dds.PVC, blind = FALSE), intgroup = "sv1", ntop = 1000) +
+  scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+  labs(color = "Surrogate\nVariable")
+PVC_pc2 <- DESeq2::plotPCA(vst(dds.PVC,blind = FALSE), intgroup = "Age_True", ntop = 1000) + labs(color = "Age_True (months)")
+PVC_pc3 <- DESeq2::plotPCA(vst(dds.PVC,blind = FALSE), intgroup = "Viral_Load", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "Viral Load\n log10 CPM")
+
+
+Kron_PVC_meta <- Kron_PVC_meta %>%
+  inner_join(. ,DESeq2::plotPCA(vst(dds.PVC,blind = FALSE), intgroup = "sv1", return = TRUE) %>%
+  as.data.frame() %>% rownames_to_column("Run") %>%
+  select(Run, PC1, PC2) )
+
+PVC_cors <- cor(Kron_PVC_meta %>% select(PC1, PC2, sv1, Age_True, Viral_Load))
+PVC_cors_p <- corPvalueFisher(PVC_cors, nrow(Kron_PVC_meta))
+textMatrix_PVC = paste(signif(PVC_cors, 2), "\n(",
+signif(PVC_cors_p, 1), ")", sep = "");
+dim(textMatrix_PVC) = dim(PVC_cors)
+PVC_cors <- PVC_cors[c(1,2),c(3,4,5)]
+textMatrix_PVC <- textMatrix_PVC[c(1,2),c(3,4,5)]
+
+mat_PVC <- Heatmap(matrix = PVC_cors,
+        cell_fun = function(j,i,x,y,width,height,fill){
+          grid.text(textMatrix_PVC[i,j],x =x , y =y, gp = gpar(fontsize = 12))
+        },
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        name = "Pearson\ncorrelation",
+        column_names_side = "top",
+        column_names_rot = 0, column_names_centered = TRUE)
+PVC_pc4 <- grid.grabExpr(draw(mat_PVC, padding = unit(c(1,1,0.5,0.5),"cm") ) )
+
+plot_grid(plotlist = list(PVC_pc1,PVC_pc2,PVC_pc3,PVC_pc4), 
+          ncol = 2, labels = c("A","B","C","D"))
+
+ggsave2(filename = "../../figures/PVC_PCAandDE.pdf", device = "pdf", width = 7, units = "in", dpi = 300)
+ggsave2(filename = "../../figures/PVC_PCAandDE.tiff", device = "tiff", width = 7, units = "in", dpi = 300)
+
+
+
+```
+
+#### 3.2.3 sva-corrected PCA
+
+```{r PCAtools PVC, fig.width=7, fig.height=4, ,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+library(ppclust)
+
+vst <- assay(vst(dds.PVC,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Kron_PVC_meta[,c("sv1")] )
+#mat <- vst
+
+horn <- parallelPCA(mat)
+#horn$n
+# 4
+  
+p <- PCAtools::pca(mat, metadata = Kron_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+elbow <- findElbowPoint(p$variance)
+#elbow
+# 4
+
+
+screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+
+    geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -1, size = 8))
+
+ biplot(p,
+    lab = paste0(p$metadata$Age_True, 'months'),
+    colby = 'Viral_Load',
+    hline = 0, vline = 0,
+    legendPosition = 'right') +
+    scale_colour_gradient(low = 'blue', high = 'red2')
+ 
+  
+eigencorplot(p,
+    components = getComponents(p, 1:horn$n),
+    metavars = c('Number_of_input_reads','Uniquely_mapped_reads_number_Genome','Age_True',
+      'Viral_Load'),
+    col = c('darkblue', 'blue2', 'black', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'Trait correlations',
+    colFrame = 'white',
+        plotRsquared = FALSE)
+
+
+eigencorplot(p,
+    components = getComponents(p, 1:5),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+```
+
+```{r pre and post PC correlations PVC }
+
+
+vst <- assay(vst(dds.PVC,blind = FALSE))
+
+vst <- assay(vst(dds.PVC,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Kron_PVC_meta[,c("sv1")] )
+
+p1 <- PCAtools::pca(vst, metadata = Kron_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+p2 <- PCAtools::pca(mat, metadata = Kron_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+
+PCA_PVC_pre <- eigencorplot(p1,
+    components = getComponents(p1, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load', "sv1"),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = 'bottom',
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'pre correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_PVC_post <- eigencorplot(p2,
+    components = getComponents(p2, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = "bottom",
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'post correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_PVC <- cowplot::plot_grid(plotlist = list(PCA_PVC_pre,PCA_PVC_post))
+
+
+```
+
+
+### 3.3 Differential expression LRT PVC
+
+```{r DE analysis in PVC, echo=FALSE, message=FALSE, warning = FALSE}
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~sv1 + Age_True + Viral_Load)
+dds.PVC <- dds.PVC[filt$tx,]
+dds.PVC <- DESeq(dds.PVC, reduced = ~sv1 + Age_True, test = "LRT")
+res <- results(dds.PVC, alpha = 0.01)
+summary(res)
+res.PVC_virus <- as.data.frame(res)
+count.PVC <- counts(dds.PVC, normalized = TRUE)
+vsd.PVC <- vst(dds.PVC)
+
+##get sig DE genes at p <= 0.01
+sig.PVC <-  rownames(res.PVC_virus %>% as.data.frame() %>% rownames_to_column("gene") %>% filter(padj <=0.01) %>% arrange(padj) %>% column_to_rownames("gene") )
+
+```
+
+### 3.4 Cluster DE genes PVC
+
+#### 3.4.1 heirarchical cluster
+
+```{r heirarchical cluster PVC, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(e1071)
+library(factoextra)
+library(NbClust)
+
+viral_order = (Kron_PVC_meta %>% select(Run, Viral_Load) %>% arrange(Viral_Load))$Run
+
+#df <- as.data.frame(count.PVC) 
+df <- assay(vsd.PVC) 
+DEgenes <- df[sig.PVC,]
+scaled <- df 
+corrected.PVC <- limma::removeBatchEffect(x = scaled, covariates = Kron_PVC_meta$sv1)
+scaledata.PVC<- corrected.PVC[sig.PVC,viral_order] %>% t %>% scale %>% t 
+
+PVC_c1 <- factoextra::fviz_nbclust(x = scaledata.PVC, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.PVC), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+geneTree = as.dendrogram(hr, method="average")
+# plot(geneTree,
+#      leaflab = "none",             
+#      main = "Gene Clustering",
+#      ylab = "Height")
+hclustk2 = cutree(hr, k=2)
+clusters <- hclustk2
+
+PVC_c2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+```
+
+#### 3.4.2 DE gene PCA
+
+```{r PCA of DE genes PVC, echo=FALSE, message=FALSE, warning = FALSE}
+
+pca.PVC <- prcomp(scaledata.PVC,scale = FALSE, center = FALSE)
+clusters.PVC <- prcomp(scaledata.PVC,scale = FALSE, center = FALSE)[[5]][,1:2] %>% as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(data.frame(tx = names(clusters), clust = clusters))
+PVC_c3 <- clusters.PVC %>%
+# prcomp(df) %>%
+  ggplot(data =., aes(x = PC1, y = PC2, color = as.character(clust ))) + 
+  geom_point() +
+  labs(x = paste0("PC1 (", round(summary(pca.PVC)$importance[2,1]*100,1), "%)"),
+       y= paste0("PC2 (", round(summary(pca.PVC)$importance[2,2]*100,1), "%)"),
+       color = "Cluster")+
+    scale_color_manual(labels = c("1", "2"), 
+                     values = c("cornflowerblue", "tomato"),
+                     guide = guide_legend(override.aes = list(size = 5) )) +
+    theme(legend.position="top")
+
+```
+
+#### 3.4.3 plot clusters scaled expression PVC
+
+```{r plot clusters scaled expression PVC, echo=FALSE, message=FALSE, warning = FALSE}
+
+test <- scaledata.PVC %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,data.frame(tx = names(clusters), clust = clusters)) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_PVC_meta %>% select(Viral_Load, Run)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+
+labels <- clusters.PVC %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+  
+PVC_c4 <- test %>%
+  ggplot(data = ., aes(x =Viral_Load, y = mean)) +
+  #geom_line(aes(x = Viral_Load, y = mean + 2*sd), linetype = "longdash") +
+  #geom_line(aes(x = Viral_Load, y = mean - 2*sd), linetype = "longdash") +
+  # geom_rect(aes(xmin = Viral_Load, ymax = mean + 2*sd,
+  #                  xmax = Viral_Load, ymin = mean + 2*sd)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Viral_Load), 
+                                  test$Viral_Load),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  #geom_smooth(method = "glm") +
+  geom_point(aes(x = Viral_Load, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 1.5, y = 2.5)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load\nlog10 CPM", y = "Scaled Expression")
+
+
+
+
+```
+
+#### 3.4.4 combined cluster plot PVC
+
+```{r cluster DE genes in PVC, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height= 7}
+
+plot_grid(plotlist = list(PVC_c1,PVC_c2,PVC_c3,PVC_c4), ncol = 2, labels = c("A","B","C","D")) 
+
+```
+
+#### 3.4.5 compare hc against fcm and km
+
+```{r cluster genes PVC, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(ppclust)
+res <- kmeans(scaledata.PVC, centers = 2)
+fcm.PVC <- fcm(scaledata.PVC, centers = 2)
+
+clusts <- inner_join(data.frame(gene = names(res$cluster),km.clust = res$cluster),
+                data.frame(gene = rownames(fcm.PVC$u), fcm.clust = fcm.PVC$cluster)
+                ) %>%
+  inner_join(clusters.PVC %>% select(tx, clust) %>% rename(gene = tx, hc.clust = clust))
+
+```
+
+
+
+### 3.4.6 compare viral load to other parameters
+
+#### 3.4.6.1 calculate DE for each variable
+
+```{r all PVC variable comparison, echo=FALSE, message=FALSE, warning = FALSE}
+
+print("DE Age_True")
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~sv1 + Viral_Load + Age_True )
+dds.PVC <- dds.PVC[filt$tx,]
+dds.PVC <- DESeq(dds.PVC, reduced = ~sv1 + Viral_Load, test = "LRT")
+res <- results(dds.PVC, alpha = 0.01)
+summary(res)
+res.PVC_Age_True <- as.data.frame(res)
+
+print("DE Virus:Age_True")
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~sv1 + Viral_Load + Age_True + Viral_Load:Age_True )
+dds.PVC <- dds.PVC[filt$tx,]
+dds.PVC <- DESeq(dds.PVC, reduced = ~sv1  + Viral_Load + Age_True, test = "LRT")
+res <- results(dds.PVC, alpha = 0.01)
+summary(res)
+res.PVC_Age_TrueVirus <- as.data.frame(res)
+
+# setdiff(
+# res.PVC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.PVC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# # 38
+# 
+# setdiff(
+#   res.PVC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.PVC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# # 22
+
+de_test.PVC <- data.frame(
+  Explanatory_Variable = c("log10 Virus TPM", "Age_True", "Virus:Age_True interaction"),
+  P05 =c(
+        res.PVC_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.PVC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.PVC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow()
+  ),
+  P01 =c(
+        res.PVC_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.PVC_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.PVC_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow()
+  )
+) 
+
+de_test.PVC %>% pivot_longer(data =., cols = c(P05, P01), names_to = "signif", values_to = "count") %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = signif)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(x = Explanatory_Variable, y = count, label = count), position = position_dodge(width = 0.9))
+ggsave(filename = "../figures/PVC_DE_by_variable.pdf", width = 6, height = 4, device = "pdf")
+
+
+```
+
+#### 3.4.6.2 generate upset plot for whole set
+
+```{r viral and Age_True:viral genes, echo=FALSE, message=FALSE, warning = FALSE, include=FALSE}
+
+library(ComplexUpset)
+
+us <- reduce(.f=function(df1,df2) full_join(df1,df2, by = "gene",), 
+      .x = list(
+res.PVC_Age_True %>% filter(padj <= 0.01) %>% rownames_to_column("gene") %>%
+  select(gene) %>% mutate(Age_True = 1),
+res.PVC_virus %>% filter(padj <= 0.01) %>% rownames_to_column("gene") %>%
+  select(gene) %>% mutate(virus = 1),
+res.PVC_Age_TrueVirus %>% filter(padj <= 0.01) %>% rownames_to_column("gene") %>%
+  select(gene) %>% mutate(Age_TrueVirus = 1)
+)) %>%
+  mutate(across(where(is.numeric), coalesce, 0)) %>% distinct() %>%
+  column_to_rownames("gene") 
+
+ComplexUpset::upset(us, colnames(us))
+
+us %>% filter(virus ==1 & Age_True == 0 & Age_TrueVirus == 0) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")) %>% inner_join(immune_genes) 
+  
+us %>% filter(virus ==0 & Age_True == 0 & Age_TrueVirus == 1) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")) %>% inner_join(immune_genes)
+
+us %>% filter(virus ==1 & Age_True == 0 & Age_TrueVirus == 1) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")) %>% inner_join(immune_genes)
+
+
+```
+
+#### 3.4.6.3 calculate immune enrichment for each DE set
+
+```{r chisquare overlap enrichmnet, echo=FALSE, message=FALSE, warning = FALSE}
+
+immune_enrichments <- rbind(
+ enrich_immune(res.PVC_virus,
+(us %>% filter(virus ==1 & Age_True == 0 & Age_TrueVirus == 0) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+immune_genes),
+enrich_immune(res.PVC_virus,
+(us %>% filter(virus ==0 & Age_True == 1 & Age_TrueVirus == 0) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+immune_genes),
+enrich_immune(res.PVC_Age_TrueVirus,
+(us %>% filter(virus ==0 & Age_True == 0 & Age_TrueVirus == 1) %>% rownames_to_column("Gene_accessions") %>%
+  mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+immune_genes)
+) %>%
+  mutate(
+    set = c(
+      "PVC_virus",
+      "PVC_Age_True",
+      "PVC_Age_True:virus"
+    ),
+  )
+  
+immune_enrichments$p.adj_BH = p.adjust(immune_enrichments$p.value, method = "BH", n = 6)
+immune_enrichments$p.adj_bonferroni = p.adjust(immune_enrichments$p.value, method = "bonferroni", n = 6)
+immune_enrichments$p.adj_hochberg = p.adjust(immune_enrichments$p.value, method = "hochberg", n = 6)
+    
+  
+ immune_enrichments <- immune_enrichments %>% rowwise() %>%
+  mutate(
+         sig = ifelse(p.adj_BH <= 0.05, TRUE,FALSE)) %>%
+  select(set, sig, p.value,p.adj_bonferroni,p.adj_hochberg,p.adj_BH, everything())
+
+immune_enrichments
+write.csv(immune_enrichments, file = "../../figures/PVC_DE_immune_enrichments.csv",quote = FALSE)
+
+```
+
+
+Due to the unique distribution of biological replicates and viral load among them, we are actually able to look at DE genes isolated among those parameters. The cool thing, it it looks like we have a bunch of genes unique to those terms and the interaction of Age_True and virus (Upset plot above). While there is overlap between these sets, it is interesting that we do get clear isolated signal from each set of parameters.This is strictly not possible with the other datasets due to the much tighter association of Age_True and virus, even in the Schmale data as seen below. 
+
+Fascinatingly, doing enrichment tests for putative immune genes (with correction for 6 tests, the de tests of each plus the immune enrichment tests of each) we see that the virus and Age_True:virus sets are immune enriched, but not the Age_True set. More interesting still is that the Age_True:virus is the most highly enriched for immune genes. Genes unique to the virus specific results include genes we like such as ADAR and APOBEC3, suggesting these are viral response genes irrespective of Age_True. To be noted, these are exclusive sets, they do not inlcude the 53 genes that overlap between virus and Age_True:virus. 
+
+#### 3.4.6.4 cluster each set
+
+```{r identify clusters for each set, echo=FALSE, message=FALSE, warning = FALSE}
+
+scaled = assay(vst(dds.PVC))
+corrected.PVC <- limma::removeBatchEffect(x = scaled, covariates = Kron_PVC_meta$sv1)
+viral_order = Kron_PVC_meta$Run
+
+###clusters by Virus
+scaledata.PVC_Virus<- corrected.PVC[
+  rownames(res.PVC_virus%>%filter(padj <= 0.01)),viral_order] %>% t %>% scale %>% t 
+
+pvc_S1 <- factoextra::fviz_nbclust(x = scaledata.PVC_Virus, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.PVC_Virus), method="pearson")), method="complete")
+geneTree = as.dendrogram(hr, method="average")
+hclustk2 = cutree(hr, k=2)
+clusters.PVC_Virus <- hclustk2
+clusters.PVC_Virus <- data.frame(tx = names(clusters.PVC_Virus), clust = clusters.PVC_Virus)
+clusters.PVC_Virus <- name_clusters(clusters.PVC_Virus, scaledata.PVC_Virus,meta = Kron_PVC_meta,identifier = "Run")
+pvc_S2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+###clusters by Age
+scaledata.PVC_Age<- corrected.PVC[
+  rownames(res.PVC_Age_True%>%filter(padj <= 0.01)),viral_order] %>% t %>% scale %>% t 
+
+pvc_S3 <- factoextra::fviz_nbclust(x = scaledata.PVC_Age, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.PVC_Age), method="pearson")), method="complete")
+geneTree = as.dendrogram(hr, method="average")
+hclustk2 = cutree(hr, k=2)
+clusters.PVC_Age <- hclustk2
+clusters.PVC_Age <- data.frame(tx = names(clusters.PVC_Age), clust = clusters.PVC_Age)
+clusters.PVC_Age <- name_clusters(clusters.PVC_Age, scaledata.PVC_Age,meta = Kron_PVC_meta,identifier = "Run")
+pvc_S4 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+###clusters by age:virus
+scaledata.PVC_AgeVirus<- corrected.PVC[
+  rownames(res.PVC_Age_TrueVirus%>%filter(padj <= 0.01)),viral_order] %>% t %>% scale %>% t 
+
+pvc_S5 <- factoextra::fviz_nbclust(x = scaledata.PVC_AgeVirus, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.PVC_AgeVirus), method="pearson")), method="complete")
+geneTree = as.dendrogram(hr, method="average")
+hclustk2 = cutree(hr, k=2)
+clusters.PVC_AgeVirus <- hclustk2
+clusters.PVC_AgeVirus <- data.frame(tx = names(clusters.PVC_AgeVirus), clust = clusters.PVC_AgeVirus)
+clusters.PVC_AgeVirus <- clusters.PVC_AgeVirus %>% mutate(direction = ifelse(clust ==1, "UP", "DOWN"))
+pvc_S6 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+cowplot::plot_grid(plotlist = list(pvc_S1,pvc_S2,pvc_S3,
+                                   pvc_S4,pvc_S5,pvc_S6))
+
+```
+
+#### 3.4.6.5 generate plots for each set cluster
+
+```{r DE by virus cluster, echo=FALSE, message=FALSE, warning = FALSE, eval = FALSE}
+
+test <- scaledata.PVC_Virus %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(., clusters.PVC_Virus) %>%
+  pivot_longer(cols = -c(tx, clust, direction), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_PVC_meta %>% select(Viral_Load, Run)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr))
+
+labels <- clusters.PVC_Virus %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+pvcc1 <- test %>%
+  ggplot(data = ., aes(x =Viral_Load, y = mean)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Viral_Load), 
+                                  test$Viral_Load),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  geom_point(aes(x = Viral_Load, y = 0)) +
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  geom_text(data = labels, aes(label = label), x = 1.5, y = 2.5)+
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load (log10 vCPM)", y = "Scaled Expression")
+
+```
+
+```{r DE by age cluster, echo=FALSE, message=FALSE, warning = FALSE, eval = FALSE}
+
+ 
+  
+test <- scaledata.PVC_Age %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(., clusters.PVC_Age) %>%
+  pivot_longer(cols = -c(tx, clust, direction), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_PVC_meta %>% select(Age_True, Run)) %>%
+  group_by(clust, Age_True) %>%
+  summarise(mean = mean(expr), sd = sd(expr))
+
+labels <- clusters.PVC_Age %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+pvcc2 <- test %>%
+  ggplot(data = ., aes(x =Age_True, y = mean)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Age_True), 
+                                  test$Age_True),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  geom_point(aes(x = Age_True, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 9.5, y = 2.5)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Age (months)", y = "Scaled Expression")
+
+```
+
+```{r DE by age:virus cluster, echo=FALSE, message=FALSE, warning = FALSE, eval = FALSE}
+
+
+##by age
+test <- scaledata.PVC_AgeVirus %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(., clusters.PVC_AgeVirus) %>%
+  pivot_longer(cols = -c(tx, clust, direction), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_PVC_meta %>% select(Age_True, Run)) %>%
+  group_by(clust, Age_True) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+labels <- clusters.PVC_AgeVirus %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+pvcc4 <- test %>%
+  ggplot(data = ., aes(x =Age_True, y = mean)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Age_True), 
+                                  test$Age_True),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  geom_point(aes(x = Age_True, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 9.5, y = 2.75)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Age (months)", y = "Scaled Expression")
+
+
+###By viral load
+test <- scaledata.PVC_AgeVirus %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(., clusters.PVC_AgeVirus) %>%
+  pivot_longer(cols = -c(tx, clust, direction), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Kron_PVC_meta %>% select(Viral_Load, Run)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+pvcc3 <- test %>%
+  ggplot(data = ., aes(x =Viral_Load, y = mean)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Viral_Load), 
+                                  test$Viral_Load),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  geom_point(aes(x = Viral_Load, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 1.5, y = 3)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load (log10 vCPM)", y = "Scaled Expression")
+
+
+```
+
+```{r pvc DE all variables plot, echo=FALSE, message=FALSE, warning = FALSE, eval = FALSE}
+
+##figure
+p <- cowplot::plot_grid(plotlist = list(pvcc1,pvcc2,pvcc3,pvcc4), ncol = 2, labels = c("A","B","C","D"))
+p
+cowplot::save_plot("../../figures/pvc_de_all_variables_plotgrid.pdf",p, base_height = 5, base_width = 7)
+
+##supplement for clusters
+p <- cowplot::plot_grid(plotlist = list(pvc_S1,pvc_S2,
+                                   pvc_S3, pvc_S4,
+                                   pvc_S5,pvc_S6), 
+                        ncol = 2, labels = c("A","","B","","C",""), scale = 0.85)
+p
+cowplot::save_plot("../../figures/pvc_de_all_variables_silhouette.pdf",p,base_height = 9, base_width = 6)
+
+```
+
+#### 3.4.6.6 upset for set clusters
+
+```{r}
+
+library(ComplexUpset)
+
+us <- reduce(.f=function(df1,df2) full_join(df1,df2, by = "tx",), 
+      .x = list(
+clusters.PVC_Virus %>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(Virus_Up = 1),
+clusters.PVC_Age %>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(Age_Up = 1),
+clusters.PVC_AgeVirus %>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(AgeVirus_Up = 1),
+clusters.PVC_Virus %>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(Virus_Down = 1),
+clusters.PVC_Age %>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(Age_Down = 1),
+clusters.PVC_AgeVirus %>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(AgeVirus_Down = 1)
+
+)) %>%
+  mutate(across(where(is.numeric), coalesce, 0)) %>% distinct() %>%
+  column_to_rownames("tx") 
+us$tx <- rownames(us)
+
+set.metadata <- data.frame(
+  set =c(
+    "Virus_Up",
+    "Age_Up",
+    "AgeVirus_Up",
+    "Virus_Down",
+    "Age_Down",
+    "AgeVirus_Down"
+  ),
+  direction = c( rep("UP",3), rep("DOWN",3))
+)
+
+Myfunc <- function(row, set) {
+    data <- (row["tx"] %in% set)
+}
+
+pdf(file = "../../figures/pvc_de_all_variables_Upset_plot.pdf", height = 5, width = 7)
+UpSetR::upset(us,
+              keep.order = TRUE,
+              sets = rev(
+                c("Virus_Up","Age_Up","AgeVirus_Up",
+                  "Virus_Down","Age_Down","AgeVirus_Down")
+                ),
+              queries = list(
+                list(query = Myfunc,
+                     params = list(paste0("gene-",immune_genes$Gene_accessions)),
+                     color = "goldenrod",
+                     active = T)
+                ),
+  sets.bar.color = c(
+    rep("blue", 3),
+    rep("red", 3)
+    ),
+  set.metadata = list(data = set.metadata,
+                      plots = list(
+                        list(type = "matrix_rows", 
+                             column = "direction", 
+                             colors = c(UP = "tomato", DOWN = "cornflowerblue"),
+                             alpha = 0.5)
+                        )
+                      )
+  )
+dev.off()
+
+```
+
+#### 3.4.6.6 immune enrichment for set clusters
+
+```{r pvc clusters chi-square, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE}
+
+immune_enrichments <- rbind(
+  enrich_immune(
+    res.PVC_virus,
+    (us %>% filter(Virus_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes),
+  enrich_immune(
+    res.PVC_Age_True,
+    (us %>% filter(Age_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes),
+  enrich_immune(
+    res.PVC_Age_TrueVirus,
+    (us %>% filter(AgeVirus_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes),
+  enrich_immune( res.PVC_virus,
+                 (us %>% filter(Virus_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+      mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+  immune_genes),
+enrich_immune(
+  res.PVC_Age_True,
+  (us %>% filter(Age_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+      mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+  immune_genes
+),
+enrich_immune(
+  res.PVC_Age_TrueVirus,
+  (us %>% filter(AgeVirus_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+      mutate(Gene_accessions = str_remove(Gene_accessions, "gene-"))
+  )$Gene_accessions,
+  immune_genes
+)
+) %>%
+  mutate(
+    set = c(
+      "Virus_Up",
+      "Age_Up",
+      "AgeVirus_Up",
+      "Virus_Down",
+      "Age_Down",
+      "AgeVirus_Down"
+    )
+  )
+  
+immune_enrichments$p.adj_BH = p.adjust(immune_enrichments$p.value, method = "BH", n = 6)
+immune_enrichments$p.adj_bonferroni = p.adjust(immune_enrichments$p.value, method = "bonferroni", n = 6)
+immune_enrichments$p.adj_hochberg = p.adjust(immune_enrichments$p.value, method = "hochberg", n = 6)
+    
+  
+ immune_enrichments <- immune_enrichments %>% rowwise() %>%
+  mutate(
+         sig = ifelse(p.adj_BH <= 0.05, TRUE,FALSE)) %>%
+  select(set, sig, p.value,p.adj_bonferroni,p.adj_hochberg,p.adj_BH, everything())
+
+immune_enrichments
+
+write.csv(immune_enrichments, file = "../../figures/PVC_DE_clusters_immune_enrichments.csv",quote = FALSE)
+
+##unique to agevirus up
+us %>%
+  filter(Age_Up == 0 & Virus_Up == 0 & AgeVirus_Up ==1) %>%
+  mutate(Gene_accessions = str_remove(tx, "gene-")) %>%
+           inner_join(immune_genes) %>%
+  distinct_at(.vars = "Gene_accessions", .keep_all = TRUE)
+  #arrange(Gene_accessions)
+  
+  
+```
+
+```{r plot chi-square test, fig.width=16, fig.height=8, echo = FALSE, warning=FALSE,message=FALSE,error=FALSE}
+
+plot_list <- list(
+  enrich_immune_plot(
+   res.PVC_virus,
+    (us %>% filter(Virus_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes, set_title ="PVC Virus UP", correct_n = 6
+  ),
+    enrich_immune_plot(
+    res.PVC_virus,
+    (us %>% filter(Virus_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes, set_title ="PVC Virus DOWN", correct_n = 6
+  ),
+  enrich_immune_plot(
+    res.PVC_Age_True,
+    (us %>% filter(Age_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes, set_title ="PVC Age UP", correct_n = 6
+  ),
+    enrich_immune_plot(
+    res.PVC_Age_True,
+    (us %>% filter(Age_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+        mutate(Gene_accessions = str_remove(Gene_accessions, "gene-")))$Gene_accessions,
+    immune_genes, set_title ="PVC Age DOWN", correct_n = 6
+  ),
+  enrich_immune_plot(
+   res.PVC_Age_TrueVirus,
+  (us %>% filter(AgeVirus_Up == 1) %>% rownames_to_column("Gene_accessions") %>%
+      mutate(Gene_accessions = str_remove(Gene_accessions, "gene-"))
+  )$Gene_accessions,
+    immune_genes, set_title ="PVC Age:Virus UP", correct_n = 6
+  ),
+    enrich_immune_plot(
+     res.PVC_Age_TrueVirus,
+  (us %>% filter(AgeVirus_Down == 1) %>% rownames_to_column("Gene_accessions") %>%
+      mutate(Gene_accessions = str_remove(Gene_accessions, "gene-"))
+  )$Gene_accessions,
+    immune_genes,set_title = "PVC Age:Virus DOWN", correct_n = 6
+)
+)
+
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 2, labels = "AUTO")
+p
+cowplot::save_plot("../../figures/chisquare_immune_enrich_pvc_all.pdf",p,ncol = 2, base_height = 12, base_width = 6,device = pdf)
+
+```
+
+#### 3.4.6.7 KEGG enrichment for pvc variable clusters
+
+```{r pvc cluster KEGG, fig.height=9}
+
+library(clusterProfiler)
+
+l <- list(
+  clusters.PVC_Virus %>% filter(direction == "UP") %>%
+    rename(gene = tx) %>% inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "Virus",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster),
+  clusters.PVC_Age %>% filter(direction == "UP") %>%
+    rename(gene = tx) %>%
+    inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "Age",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster),
+  clusters.PVC_AgeVirus %>% filter(direction == "UP") %>%
+    rename(gene = tx) %>%
+    inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "AgeVirus",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster),
+  clusters.PVC_Virus %>% filter(direction == "DOWN") %>%
+    rename(gene = tx) %>%
+    inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "Virus",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster),
+  clusters.PVC_Age %>% filter(direction == "DOWN") %>%
+    rename(gene = tx) %>%
+    inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "Age",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster),
+  clusters.PVC_AgeVirus %>% filter(direction == "DOWN") %>%
+    rename(gene = tx) %>%
+    inner_join(gene2ko) %>%
+    unique() %>% mutate(
+      Tissue = "PVC",
+      variable = "AgeVirus",
+      cluster = paste0(Tissue, "_", variable, "_", direction)
+    ) %>% select(gene, ko, direction, Tissue, cluster)
+)
+
+res.kegg.pvc <- lapply(l, function(x){
+enrichKEGG(
+  gene = x$ko,
+  organism = "ko"
+)
+})
+
+l
+
+names(res.kegg.pvc) <- c("PVC_Virus_UP","PVC_Age_UP","PVC_Age_Virus_UP","PVC_Virus_DOWN","PVC_Age_DOWN","PVC_Age_Virus_DOWN")
+
+res.kegg.pvc["PVC_Age_Virus_DOWN"]
+
+kegg_res <- lapply(names(res.kegg.pvc), function(x){
+  as.data.frame(res.kegg.pvc[x]) %>%
+    mutate(cluster = x) %>%
+    rename("Description" = paste0(x,".","Description")) %>%
+    rownames_to_column("ID") %>%
+    select(ID,cluster,Description) %>%
+    mutate(presence = 1)
+}) %>%
+  do.call("rbind",.) %>%
+  pivot_wider(id_cols=c(ID,Description), names_from = cluster, values_from = presence,values_fill = 0) 
+
+
+kegg_res %>%
+  filter(PVC_Virus_UP == 1, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 0 & PVC_Age_DOWN == 0 & PVC_Virus_DOWN == 0 )
+kegg_res %>%
+  filter(PVC_Virus_UP == 0, PVC_Age_UP == 1 & PVC_Age_Virus_UP == 0 & PVC_Age_DOWN == 0 & PVC_Virus_DOWN == 0 )
+kegg_res %>%
+  filter(PVC_Virus_UP == 0, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 1 & PVC_Age_DOWN == 0 & PVC_Virus_DOWN == 0 )
+kegg_res %>%
+  filter(PVC_Virus_UP == 1, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 1 & PVC_Age_DOWN == 0 & PVC_Virus_DOWN == 0 )
+
+kegg_res %>%
+  filter(PVC_Virus_UP == 0, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 0 & PVC_Age_DOWN == 0 & PVC_Virus_DOWN == 1 )
+kegg_res %>%
+  filter(PVC_Virus_UP == 0, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 0 & PVC_Age_DOWN == 1 & PVC_Virus_DOWN == 0 )
+kegg_res %>%
+  filter(PVC_Virus_UP == 0, PVC_Age_UP ==0 & PVC_Age_Virus_UP == 0 & PVC_Age_DOWN == 1 & PVC_Virus_DOWN == 1 )
+
+
+kegg_multi_expr <- reduce(
+  .x = l,
+  .f=function(df1,df2) full_join(df1,df2)
+) %>% select(ko, cluster) %>%
+  mutate(presence = ifelse(str_detect(cluster,"UP"),1,-1)) %>%
+  unique() %>% 
+  pivot_wider(id_cols = ko, names_from = cluster, values_from = presence, values_fill = 0) %>%
+  column_to_rownames("ko")
+
+library(pathview)
+pathview(gene.data = kegg_multi_expr, 
+         pathway.id = "ko05131",
+         species = "ko",
+         keys.align = "y",
+         kegg.native = T, 
+         match.data = F, 
+         multi.state = T, 
+         same.layer = T)
+
+
+# #Manually exploring the immune and KEGG enrichments here
+# clusterProfiler::heatplot(res.kegg.pvc$PVC_Age_DOWN)
+# 
+# clusterProfiler::emapplot(
+#   enrichplot::pairwise_termsim(res.kegg.pvc$PVC_Age_DOWN)
+#   )
+# 
+# 
+# as.data.frame(res.kegg.pvc$PVC_Age_UP)
+# 
+# K00522 - ferritin
+# K01540- sodium/potassium-transporting ATPase subunit beta
+# K14738-  metalloreductase STEAP2
+# K14683 - solute carrier family 34 (sodium-dependent phosphate cotransporter)
+# 
+# AcTxAnot 
+# 
+# l[2][[1]] %>% filter(ko %in% c("K00522", "K14738") )
+# 
+# 
+# clusterProfiler::heatplot(res.kegg.pvc$PVC_Age_Virus_UP)
+# 
+# l[3][[1]] %>% filter(ko %in% c("K04734", "K12646") )
+# 
+# LOC101847784	K12646 -- DexD/Hbox helicase
+# LOC101854034	K12646 -- RIG-I-like
+# LOC101863680	K04734 -- NFkBI
+# 
+# immune_genes %>% filter(Gene_accessions %in% c("LOC101847784","LOC101854034","LOC101863680"))
+# 
+# 
+# 
+# immune_genes %>% filter(Gene_accessions %in% (
+#   us %>% filter(AgeVirus_Up == 1 & Virus_Up == 0 & Age_Up == 0) %>% rownames() %>% str_remove(., "gene-")
+# )) %>%
+#   group_by(Subtype_name, Subtype, Type) %>%
+#   summarise(count = length(Subtype_name),genes = paste0(Gene_accessions, collapse = ",")) %>% arrange(Type)
+
+# immune_genes %>% filter(Gene_accessions %in% (
+#   us %>% filter(AgeVirus_Up == 0, Virus_Up == 1, Age_Up == 0) %>% rownames() %>% str_remove(., "gene-")
+# )) %>%
+#   group_by(Subtype_name, Subtype, Type) %>%
+#   summarise(count = length(Subtype_name),genes = paste0(Gene_accessions, collapse = ",")) %>% arrange(Type)
+
+# 
+# immune_genes %>% filter(Gene_accessions %in% (
+#   us %>% filter(AgeVirus_Up == 1 & Virus_Up == 1 & Age_Up == 0) %>% rownames() %>% str_remove(., "gene-")
+# )) %>%
+#   group_by(Type, Subtype_name, Subtype, ) %>%
+#   summarise(count = length(Subtype_name),genes = paste0(Gene_accessions, collapse = ",")) %>% arrange(Type)
+
+
+
+```
+
+
+```{r, fig.width=7, fig.height=12}
+
+library("openxlsx")
+res.kegg.pvc%>% lapply(., as.data.frame) %>% write.xlsx(., file = "../../figures/pvc_vars_kegg_res.xlsx", rowNames = TRUE)
+
+
+##Virus
+clusterProfiler::heatplot(res.kegg.pvc[1][[1]])
+###Age
+clusterProfiler::heatplot(res.kegg.pvc[2][[1]])
+
+##Virus
+clusterProfiler::heatplot(res.kegg.pvc[4][[1]])
+###Age
+clusterProfiler::heatplot(res.kegg.pvc[5][[1]])
+
+barplot(res.kegg.pvc[2][[1]],showCategory = 100)
+
+ComplexHeatmap::Heatmap(kegg_res %>% select(-ID) %>% column_to_rownames("Description"),
+)
+
+
+emapplot(enrichplot::pairwise_termsim(res.kegg.pvc[1][[1]]))
+
+emapplot(enrichplot::pairwise_termsim(res.kegg.pvc[4][[1]]))
+
+```
+
+
+## 4 Greer DE
+
+### 4.1 import read data and clean
+
+```{r import read data and clean Greer, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+txi_Greer_PVC<- tximport( importer=read.delim, Greer_PVC_files, type = "salmon", tx2gene = tx2gene)
+Greer_PVC_meta <- metadata_AAbV %>% filter(study == "Greer 2018" & Tissue == "PVC")
+
+Greer_PVC_TPM <- txi_Greer_PVC$abundance
+
+filt <- Greer_PVC_TPM %>% as.data.frame() %>% 
+  rownames_to_column("tx") %>% 
+  pivot_longer(cols = -tx, names_to = "Run", values_to = "TPM") %>%
+  inner_join(., Greer_PVC_meta %>% select(Age, Run) ) %>%
+  group_by(Age, tx) %>%
+  summarise(min = sum(TPM >=1)) %>% 
+  ungroup()%>%
+  group_by(tx) %>%
+  summarise( num = sum(min >=3)) %>%
+  filter( num >= 1) %>%
+  select(tx) # 13,520
+
+```
+
+### 4.2 surrogate variable analysis Greer
+
+#### 3.2.1 sva calculation
+
+```{r surrogate variable analysis Greer, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~Age_True + Viral_Load)
+dds.Greer <- DESeq2::estimateSizeFactors(dds.Greer)
+counts <- counts(dds.Greer, normalized = TRUE)
+#counts <- counts[which(rowSums(counts) > 0),]
+counts <- counts[filt$tx,]
+
+mod <- model.matrix(~Age_True + Viral_Load , data=Greer_PVC_meta)
+mod0 <- model.matrix(~Age_True, data=Greer_PVC_meta)
+svnum <- num.sv(counts, mod, method = "be") 
+svnum
+svobj <- svaseq(counts, mod, mod0, n.sv = svnum)
+#num sv is 2
+Greer_PVC_meta$sv1 = svobj$sv[,1]
+
+##incorporate SVs into model
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~sv1  + Age_True + Viral_Load)
+dds.Greer <- dds.Greer[filt$tx,]
+vsd.Greer <- assay(vst(dds.Greer))
+
+```
+
+#### 3.2.1 sva visualiztion
+
+```{r surrogate variable figs Greer, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+Greer_pc1 <- DESeq2::plotPCA(vst(dds.Greer, blind = FALSE), intgroup = "sv1", ntop= 1000) +
+  scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+  labs(color = "Surrogate\nVariable")
+Greer_pc2 <- DESeq2::plotPCA(vst(dds.Greer,blind = FALSE), intgroup = "Age_True", ntop = 1000) + labs(color = "Age_True (months)") + geom_label_repel(aes(label = name))
+Greer_pc3 <- DESeq2::plotPCA(vst(dds.Greer,blind = FALSE), intgroup = "Viral_Load", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "Viral Load\n log10 CPM")
+
+
+
+Greer_PVC_meta <- Greer_PVC_meta %>%
+  inner_join(. ,DESeq2::plotPCA(vst(dds.Greer,blind = FALSE), intgroup = "sv1", return = TRUE) %>%
+  as.data.frame() %>% rownames_to_column("Run") %>%
+  select(Run, PC1, PC2) )
+
+Greer_cors <- cor(Greer_PVC_meta %>% select(PC1, PC2, sv1, Age_True, Viral_Load))
+Greer_cors_p <- corPvalueFisher(Greer_cors, nrow(Greer_PVC_meta))
+textMatrix_Greer = paste(signif(Greer_cors, 2), "\n(",
+signif(Greer_cors_p, 1), ")", sep = "");
+dim(textMatrix_Greer) = dim(Greer_cors)
+Greer_cors <- Greer_cors[c(1,2),c(3,4,5)]
+textMatrix_Greer <- textMatrix_Greer[c(1,2),c(3,4,5)]
+
+mat_Greer <- Heatmap(matrix = Greer_cors,
+        cell_fun = function(j,i,x,y,width,height,fill){
+          grid.text(textMatrix_Greer[i,j],x =x , y =y, gp = gpar(fontsize = 12))
+        },
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        name = "Pearson\ncorrelation",
+        column_names_side = "top",
+        column_names_rot = 0, column_names_centered = TRUE)
+Greer_pc4 <- grid.grabExpr(draw(mat_Greer, padding = unit(c(1,1,0.5,0.5),"cm") ) )
+
+plot_grid(plotlist = list(Greer_pc1,Greer_pc2,Greer_pc3,Greer_pc4), 
+          ncol = 2, labels = c("A","B","C","D"))
+
+ggsave2(filename = "../../figures/Greer_PCAandDE.pdf", device = "pdf", width = 7, units = "in", dpi = 300)
+ggsave2(filename = "../../figures/Greer_PCAandDE.tiff", device = "tiff", width = 7, units = "in", dpi = 300)
+
+
+
+```
+
+#### 4.2.3 sva-corrected PCA
+
+```{r PCAtools Greer, fig.width=7, fig.height=4, ,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+library(ppclust)
+
+vst <- assay(vst(dds.Greer,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Greer_PVC_meta[,c("sv1")] )
+#mat <- vst
+
+horn <- parallelPCA(mat)
+#horn$n
+# 4
+  
+p <- PCAtools::pca(mat, metadata = Greer_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+elbow <- findElbowPoint(p$variance)
+#elbow
+# 4
+
+
+screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+
+    geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -1, size = 8))
+
+ biplot(p,
+    lab = paste0(p$metadata$Age_True, 'months'),
+    colby = 'Viral_Load',
+    hline = 0, vline = 0,
+    legendPosition = 'right') +
+    scale_colour_gradient(low = 'blue', high = 'red2')
+
+  
+eigencorplot(p,
+    components = getComponents(p, 1:horn$n),
+    metavars = c('Number_of_input_reads','Uniquely_mapped_reads_number_Genome','Age_True',
+      'Viral_Load'),
+    col = c('darkblue', 'blue2', 'black', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'Trait correlations',
+    colFrame = 'white',
+        plotRsquared = FALSE)
+
+
+eigencorplot(p,
+    components = getComponents(p, 1:5),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+
+
+```
+
+
+```{r pre and post PC correlations Greer }
+
+
+vst <- assay(vst(dds.Greer,blind = FALSE))
+
+mat <- limma::removeBatchEffect(x = vst, covariates = Greer_PVC_meta[,c("sv1")] )
+
+p1 <- PCAtools::pca(vst, metadata = Greer_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+p2 <- PCAtools::pca(mat, metadata = Greer_PVC_meta %>% column_to_rownames("Run"), removeVar = 0.75, center = TRUE, scale = TRUE)
+
+PCA_Greer_pre <- eigencorplot(p1,
+    components = getComponents(p1, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load', "sv1"),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = 'bottom',
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'pre correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_Greer_post <- eigencorplot(p2,
+    components = getComponents(p2, 1:2),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = "bottom",
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'post correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_Greer <- cowplot::plot_grid(plotlist = list(PCA_Greer_pre,PCA_Greer_post))
+
+biplot(p1,colby = "Age",)
+biplot(p2,colby = "Age")
+
+DESeq2::plotPCA(vst(dds.Greer), intgroup= "sv1")
+
+
+```
+
+
+### 4.3 Differential expression LRT Greer
+
+```{r DE analysis in Greer, echo=FALSE, message=FALSE, warning = FALSE}
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~sv1 +  Age_True + Viral_Load)
+dds.Greer <- dds.Greer[filt$tx,]
+dds.Greer <- DESeq(dds.Greer, reduced = ~sv1 +  Age_True, test = "LRT")
+res <- results(dds.Greer, alpha = 0.01)
+summary(res)
+res.Greer_virus <- as.data.frame(res)
+count.Greer <- counts(dds.Greer, normalized = TRUE)
+vsd.Greer <- vst(dds.Greer)
+
+##get sig DE genes at p <= 0.01
+sig.Greer <-  rownames(res.Greer_virus %>% as.data.frame() %>% rownames_to_column("gene") %>% filter(padj <=0.01) %>% arrange(padj) %>% column_to_rownames("gene") )
+
+```
+
+### 4.4 Cluster DE genes Greer
+
+#### 4.4.1 heirarchical cluster
+
+```{r heirarchical cluster Greer, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(e1071)
+library(factoextra)
+library(NbClust)
+
+viral_order = (Greer_PVC_meta %>% select(Run, Viral_Load) %>% arrange(Viral_Load))$Run
+
+#df <- as.data.frame(count.Greer)
+df <- assay(vsd.Greer) 
+DEgenes <- df[sig.Greer,]
+scaled <- df 
+corrected.Greer <- limma::removeBatchEffect(x = scaled, covariates = Greer_PVC_meta$sv1)
+scaledata.Greer<- corrected.Greer[sig.Greer,viral_order] %>% t %>% scale %>% t 
+
+Greer_c1 <- factoextra::fviz_nbclust(x = scaledata.Greer, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.Greer), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+geneTree = as.dendrogram(hr, method="average")
+# plot(geneTree,
+#      leaflab = "none",             
+#      main = "Gene Clustering",
+#      ylab = "Height")
+hclustk2 = cutree(hr, k=2)
+clusters <- hclustk2
+
+
+Greer_c2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+```
+
+#### 4.4.2 DE gene PCA
+
+```{r PCA of DE genes Greer, echo=FALSE, message=FALSE, warning = FALSE}
+
+pca.Greer <- prcomp(scaledata.Greer,scale = FALSE, center = FALSE)
+clusters.Greer <- prcomp(scaledata.Greer,scale = FALSE, center = FALSE)[[5]][,1:2] %>% as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(data.frame(tx = names(clusters), clust = clusters))
+Greer_c3 <- clusters.Greer %>%
+# prcomp(df) %>%
+  ggplot(data =., aes(x = PC1, y = PC2,label = tx, color = as.character(clust ))) + 
+  geom_point() +
+  labs(x = paste0("PC1 (", round(summary(pca.Greer)$importance[2,1]*100,1), "%)"),
+       y= paste0("PC2 (", round(summary(pca.Greer)$importance[2,2]*100,1), "%)"),
+       color = "Cluster")+
+    theme(legend.position="top")
+
+clusters.Greer %>%
+  mutate(Gene_accessions = str_remove(tx, "gene-")) %>%
+  left_join(immune_genes)
+
+```
+
+#### 4.4.3 plot clusters scaled expression Greer
+
+```{r plot clusters scaled expression Greer, echo=FALSE, message=FALSE, warning = FALSE}
+
+test <- scaledata.Greer %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,data.frame(tx = names(clusters), clust = clusters)) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = "Run", values_to = "expr") %>%
+  inner_join(., Greer_PVC_meta %>% select(Viral_Load, Run)) %>%
+  group_by(clust, Viral_Load) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+Greer_c4 <- test %>%
+  ggplot(data = ., aes(x =Viral_Load, y = mean)) +
+  #geom_line(aes(x = Viral_Load, y = mean + 2*sd), linetype = "longdash") +
+  #geom_line(aes(x = Viral_Load, y = mean - 2*sd), linetype = "longdash") +
+  # geom_rect(aes(xmin = Viral_Load, ymax = mean + 2*sd,
+  #                  xmax = Viral_Load, ymin = mean + 2*sd)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$Viral_Load), 
+                                  test$Viral_Load),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  #geom_smooth(method = "glm") +
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load\nlog10 CPM", y = "Scaled Expression")
+
+
+
+```
+
+#### 4.4.4 combined cluster plot Greer
+
+```{r cluster DE genes in Greer, fig.width=7, fig.height= 7, echo=FALSE}
+
+plot_grid(plotlist = list(Greer_c1,Greer_c2,Greer_c3,Greer_c4), ncol = 2, labels = c("A","B","C","D")) 
+
+```
+
+#### 4.4.5 compare hc against fcm and km
+
+```{r cluster genes Greer, echo=FALSE}
+
+library(ppclust)
+res <- kmeans(scaledata.Greer, centers = 2)
+fcm.Greer <- fcm(scaledata.Greer, centers = 2)
+
+clusts <- inner_join(data.frame(gene = names(res$cluster),km.clust = res$cluster),
+                data.frame(gene = rownames(fcm.Greer$u), fcm.clust = fcm.Greer$cluster)
+                ) %>%
+  inner_join(clusters.Greer %>% select(tx, clust) %>% rename(gene = tx, hc.clust = clust))
+
+```
+
+### 4.4.6 compare viral load to other parameters
+
+```{r all Greer variable comparison, echo=FALSE, warning=FALSE, error = FALSE, message = FALSE}
+
+print("DE Age_True")
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~sv1  + Viral_Load + Age_True )
+dds.Greer <- dds.Greer[filt$tx,]
+dds.Greer <- DESeq(dds.Greer, reduced = ~sv1 + Viral_Load, test = "LRT")
+res <- results(dds.Greer, alpha = 0.01)
+summary(res)
+res.Greer_Age_True <- as.data.frame(res)
+
+print("DE Virus:Age_True")
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~sv1 + Viral_Load + Age_True + Viral_Load:Age_True )
+dds.Greer <- dds.Greer[filt$tx,]
+dds.Greer <- DESeq(dds.Greer, reduced = ~sv1 + Viral_Load + Age_True, test = "LRT")
+res <- results(dds.Greer, alpha = 0.01)
+summary(res)
+res.Greer_Age_TrueVirus <- as.data.frame(res)
+
+### NOT ENOUGH DEGREES OF FREEDOM
+
+# setdiff(
+# res.Greer_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.Greer_virus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# # 38
+# 
+# setdiff(
+#   res.Greer_virus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene), # 38
+# res.Greer_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) # 22
+# )
+# # 22
+
+de_test.Greer <- data.frame(
+  Explanatory_Variable = c("log10 Virus TPM", "Age_True", "Age_True:Virus"),
+  P05 =c(
+        res.Greer_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.Greer_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.Greer_Age_TrueVirus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow()
+  ),
+  P01 =c(
+        res.Greer_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.Greer_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.Greer_Age_TrueVirus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow()
+  )
+) 
+de_test.Greer %>% pivot_longer(data =., cols = c(P05, P01), names_to = "signif", values_to = "count") %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = signif)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(x = Explanatory_Variable, y = count, label = count), position = position_dodge(width = 0.9))
+ggsave(filename = "../figures/Greer_DE_by_variable.pdf", width = 6, height = 4, device = "pdf")
+
+
+```
+
+
+## 5 Differential Expression Kron 2023, Schmale GILL
+
+### 5.1 import read data and clean
+
+```{r import read data and clean GILL, echo=FALSE, message=FALSE, warning = FALSE, fig.width=4}
+
+Schmale_GILL_meta <- metadata_AAbV %>% filter(study == "Kron 2023" & Tissue == "GILL") %>%
+  mutate(Age_True_group= ifelse(Age_True < 10, 9,10)) %>%
+  inner_join(
+    read.csv("../../data/Schmale_B27_qPCR.csv"), by = c("Library.Name"="Sample_ID")
+  )%>%
+  mutate(qpcr_Virus = log(qpcr_Virus+1,10)) %>%
+  mutate(category = ifelse(qpcr_Virus > 1.5, "High","Low"),
+         category_3 = ifelse(Viral_Load > 1.5, "High","Low"))
+
+
+Schmale_GILL_meta %>%
+  ggplot(data =., aes(x = Viral_Load, y = qpcr_Virus)) +
+  geom_point()
+
+Schmale_GILL_meta %>%
+  pivot_longer( cols = c(Viral_Load, qpcr_Virus), names_to = "method", values_to = "expr") %>%
+  ggplot(data =., aes(x = method, y = expr, group = Library.Name)) +
+  geom_point() +
+  geom_line()
+
+txi_Schmale_GILL<- tximport( importer=read.delim, Schmale_GILL_files, type = "salmon", tx2gene = tx2gene)
+
+
+#Age_True not target variable, generally within a month or so, going to filter by half the sampels need to have an TPM of 1 or higher
+
+Schmale_GILL_TPM <- txi_Schmale_GILL$abundance
+
+
+filt <-Schmale_GILL_TPM[rowSums(Schmale_GILL_TPM > 1) > 9,] %>% rownames()# 10267
+
+table(Schmale_GILL_meta %>% select(category))
+
+Schmale_GILL_meta %>% ggplot(aes(x = Age_True, y = Viral_Load)) +
+  geom_point()+
+  geom_smooth(method = "lm")
+
+```
+
+We can see that despite being close in Age_True, viral load and Age_True have a clear covariance that needs to be accounted for in the model.
+
+### 5.2 surrogate variable analysis GILL
+
+#### 5.2.1 sva calculation
+
+```{r surrogate variable analysis GILL, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+txi_Schmale_GILL<- tximport( importer=read.delim, Schmale_GILL_files, type = "salmon", tx2gene = tx2gene)
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~Age_True + qpcr_Virus)
+dds.GILL <- DESeq2::estimateSizeFactors(dds.GILL)
+counts <- counts(dds.GILL, normalized = TRUE)
+#counts <- counts[which(rowSums(counts) > 0),]
+counts <- counts[filt,]
+
+mod <- model.matrix(~Age_True + qpcr_Virus , data=Schmale_GILL_meta)
+mod0 <- model.matrix(~Age_True, data=Schmale_GILL_meta)
+svnum <- num.sv(counts, mod, method = "be") 
+svnum
+svobj <- svaseq(counts, mod, mod0, n.sv = svnum)
+#num sv is 1
+Schmale_GILL_meta$sv1 = svobj$sv[,1]
+Schmale_GILL_meta$sv2 = svobj$sv[,2]
+Schmale_GILL_meta$sv3 = svobj$sv[,3]
+
+##incorporate SVs into model
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~sv1 + sv2 + sv3 + Age_True + qpcr_Virus)
+#dds.GILL <- DESeq2::DESeqDataSetFromMatrix(countData = mat , Schmale_GILL_meta, design = ~sv1 + Age_True + qpcr_Virus)
+dds.GILL <- dds.GILL[filt,]
+vsd.GILL <- assay(vst(dds.GILL))
+## Sv1 driven entirely by a single outlier
+## try removing 23B27L
+
+```
+
+#### 5.2.2 sva visualizaiton
+
+```{r surrogate variable figs GILL, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height=7}
+
+GILL_pc1 <- DESeq2::plotPCA(vst(dds.GILL, blind = FALSE), intgroup = "sv1", ntop = 1000) +
+  scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+  labs(color = "Surrogate\nVariable")
+# DESeq2::plotPCA(vst(dds.GILL, blind = FALSE), intgroup = "sv1") +
+#   scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+#   labs(color = "Surrogate\nVariable")
+# DESeq2::plotPCA(vst(dds.GILL, blind = FALSE), intgroup = "sv2") +
+#   scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+#   labs(color = "Surrogate\nVariable")
+# DESeq2::plotPCA(vst(dds.GILL, blind = FALSE), intgroup = "sv3") +
+#   scale_color_gradient2(low = "purple", mid = "red", high = "yellow", midpoint = 0.1) +
+#   labs(color = "Surrogate\nVariable")
+GILL_pc2 <- DESeq2::plotPCA(vst(dds.GILL,blind = FALSE), intgroup = "Age_True", ntop = 1000) + labs(color = "Age_True (months)")
+GILL_pc3 <- DESeq2::plotPCA(vst(dds.GILL,blind = FALSE), intgroup = "Viral_Load", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "Viral Load\n log10 CPM")
+
+GILL_pc4 <-DESeq2::plotPCA(vst(dds.GILL,blind = FALSE), intgroup = "qpcr_Virus", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "qPCR Virus\n log10 count")
+
+GILL_pc5 <-DESeq2::plotPCA(vst(dds.GILL,blind = FALSE), intgroup = "category", ntop = 1000)
+
+
+
+
+
+Schmale_GILL_meta <- Schmale_GILL_meta %>%
+  inner_join(. ,DESeq2::plotPCA(vst(dds.GILL,blind = FALSE), intgroup = "sv1", return = TRUE) %>%
+  as.data.frame() %>% rownames_to_column("Library.Name") %>%
+  select(	
+Library.Name, PC1, PC2) )
+
+GILL_cors <- cor(Schmale_GILL_meta %>% select(PC1, PC2, sv1, Age_True, Viral_Load, qpcr_Virus))
+GILL_cors_p <- corPvalueFisher(GILL_cors, nrow(Schmale_GILL_meta))
+textMatrix_GILL = paste(signif(GILL_cors, 2), "\n(",
+signif(GILL_cors_p, 1), ")", sep = "");
+dim(textMatrix_GILL) = dim(GILL_cors)
+GILL_cors <- GILL_cors[c(1,2),c(3,4,5,6)]
+textMatrix_GILL <- textMatrix_GILL[c(1,2),c(3,4,5,6)]
+
+mat_GILL <- Heatmap(matrix = GILL_cors,
+        cell_fun = function(j,i,x,y,width,height,fill){
+          grid.text(textMatrix_GILL[i,j],x =x , y =y, gp = gpar(fontsize = 10))
+        },
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        name = "Pearson\ncorrelation",
+        column_names_side = "top",
+        column_labels = c("sv1","Age_True","Seq","qPCR"),
+        column_names_rot = 0, column_names_centered = TRUE)
+GILL_pc6 <- grid.grabExpr(draw(mat_GILL, padding = unit(c(1,1,0.5,0.5),"cm") ) )
+
+plot_grid(plotlist = list(GILL_pc1,GILL_pc2,GILL_pc3,GILL_pc4,GILL_pc5,GILL_pc6), 
+          ncol = 2, labels = c("A","B","C","D","E","F"))
+
+
+
+```
+
+#### 5.2.3 sva corrected PCA
+
+```{r PCAtools GILL, fig.width=7, fig.height=4, warning = FALSE, echo = FALSE, message=FALSE}
+
+library(ppclust)
+
+vst <- assay(vst(dds.GILL,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Schmale_GILL_meta[,c("sv1","sv2","sv3")] )
+
+horn <- parallelPCA(mat)
+#horn$n
+# 4
+  
+p <- PCAtools::pca(mat, metadata = Schmale_GILL_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+elbow <- findElbowPoint(p$variance)
+#elbow
+# 6
+
+p <- PCAtools::pca(vst[, colnames(counts) != "23B27L"] %>% t() %>% scale %>% t(), metadata = Schmale_GILL_meta %>%
+                     filter(Library.Name != "23B27L") %>%
+                     column_to_rownames("Library.Name"), removeVar = 0.1, center = TRUE, scale = TRUE)
+
+
+screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+
+    geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -1, size = 8))
+
+ biplot(p,
+    lab = paste0(p$metadata$Age_True, 'months'),
+    colby = 'Viral_Load',
+    hline = 0, vline = 0,
+    legendPosition = 'right') +
+    scale_colour_gradient(low = 'blue', high = 'red2')
+
+  
+eigencorplot(p,
+    components = getComponents(p, 1:horn$n),
+    metavars = c('Number_of_input_reads','Uniquely_mapped_reads_number_Genome','Age_True',
+      'Viral_Load','qpcr_Virus'),
+    col = c('darkblue', 'blue2', 'black', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'Gill PC1-5 correlations',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+eigencorplot(p,
+    components = getComponents(p, 1:5),
+    metavars = c('Age_True',
+      'Viral_Load'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+
+
+```
+
+```{r pre and post PC correlations GILL }
+
+
+vst <- assay(vst(dds.GILL,blind = FALSE))
+
+vst <- assay(vst(dds.GILL,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Schmale_GILL_meta[,c("sv1","sv2","sv3")] )
+
+p1 <- PCAtools::pca(vst, metadata = Schmale_GILL_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+p2 <- PCAtools::pca(mat, metadata = Schmale_GILL_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+
+PCA_GILL_pre <- eigencorplot(p1,
+    components = getComponents(p1, 1:2),
+    metavars = c('Age_True',
+      'qpcr_Virus', "sv1","sv2","sv3"),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = 'bottom',
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'pre correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_GILL_post <- eigencorplot(p2,
+    components = getComponents(p2, 1:2),
+    metavars = c('Age_True',
+      'qpcr_Virus'),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = "bottom",
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'post correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_GILL <- cowplot::plot_grid(plotlist = list(PCA_GILL_pre,PCA_GILL_post))
+
+
+```
+
+
+
+### 5.3 Differential expression LRT GILL
+
+```{r DE analysis in GILL, echo=FALSE, message=FALSE, warning = FALSE}
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~sv1 + sv2 + sv3 + Age_True + qpcr_Virus)
+dds.GILL <- dds.GILL[filt,]
+dds.GILL <- DESeq(dds.GILL, reduced = ~sv1 + sv2 + sv3 + Age_True, test = "LRT")
+res <- results(dds.GILL, alpha = 0.05)
+summary(res)
+res.GILL_virus <- as.data.frame(res)
+count.GILL <- counts(dds.GILL, normalized = TRUE)
+vsd.GILL <- vst(dds.GILL)
+
+##get sig DE genes at p <= 0.01
+sig.GILL <-  rownames(res.GILL_virus %>% as.data.frame() %>% rownames_to_column("gene") %>% filter(padj <=0.05) %>% arrange(padj) %>% column_to_rownames("gene") )
+
+```
+
+### 5.4 Cluster DE genes GILL
+
+#### 5.4.1 heirarchical cluster
+
+```{r heirarchical cluster GILL, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(e1071)
+library(factoextra)
+library(NbClust)
+
+viral_order = (Schmale_GILL_meta %>% select(Library.Name, Viral_Load) %>% arrange(Viral_Load))$Library.Name
+
+#df <- as.data.frame(count.GILL) 
+df <- assay(vsd.GILL) 
+DEgenes <- df[sig.GILL,]
+scaled <- df 
+corrected.GILL <- limma::removeBatchEffect(x = scaled, covariates = Schmale_GILL_meta[,c("sv1","sv2","sv3")])
+scaledata.GILL<- corrected.GILL[sig.GILL,viral_order] %>% t %>% scale %>% t 
+
+GILL_c1 <- factoextra::fviz_nbclust(x = scaledata.GILL, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.GILL), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+geneTree = as.dendrogram(hr, method="average")
+# plot(geneTree,
+#      leaflab = "none",             
+#      main = "Gene Clustering",
+#      ylab = "Height")
+hclustk2 = cutree(hr, k=2)
+clusters <- hclustk2
+
+GILL_c2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+```
+
+
+#### 5.4.2 DE gene PCA
+
+```{r PCA of DE genes GILL, echo=FALSE, message=FALSE, warning = FALSE}
+
+pca.GILL <- prcomp(scaledata.GILL,scale = FALSE, center = FALSE)
+clusters.GILL <- prcomp(scaledata.GILL,scale = FALSE, center = FALSE)[[5]][,1:2] %>% as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(data.frame(tx = names(clusters), clust = clusters))
+GILL_c3 <- clusters.GILL %>%
+# prcomp(df) %>%
+  ggplot(data =., aes(x = PC1, y = PC2, color = as.character(clust ))) + 
+  geom_point() +
+  labs(x = paste0("PC1 (", round(summary(pca.GILL)$importance[2,1]*100,1), "%)"),
+       y= paste0("PC2 (", round(summary(pca.GILL)$importance[2,2]*100,1), "%)"),
+       color = "Cluster")+
+    scale_color_manual(labels = c("1", "2"), 
+                     values = c("cornflowerblue", "tomato"),
+                     guide = guide_legend(override.aes = list(size = 5) )) +
+    theme(legend.position="top")
+
+```
+
+#### 5.4.3 plot clusters scaled expression GILL
+
+```{r plot clusters scaled expression GILL, echo=FALSE, message=FALSE, warning = FALSE}
+
+test <- scaledata.GILL %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,data.frame(tx = names(clusters), clust = clusters)) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = "Library.Name", values_to = "expr") %>%
+  inner_join(., Schmale_GILL_meta %>% select(qpcr_Virus, Library.Name)) %>%
+  group_by(clust, qpcr_Virus) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+
+labels <- clusters.GILL %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+GILL_c4 <- test %>%
+  ggplot(data = ., aes(x =qpcr_Virus, y = mean)) +
+  #geom_line(aes(x = Viral_Load, y = mean + 2*sd), linetype = "longdash") +
+  #geom_line(aes(x = Viral_Load, y = mean - 2*sd), linetype = "longdash") +  
+  # geom_rect(aes(xmin = Viral_Load, ymax = mean + 2*sd,
+  #                  xmax = Viral_Load, ymin = mean + 2*sd)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$qpcr_Virus), 
+                                  test$qpcr_Virus),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  #geom_smooth(method = "glm") +
+  geom_point(aes(x = qpcr_Virus, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 1.5, y = 2.5)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load\nlog10 copies / ng RNA", y = "Scaled Expression")
+
+
+
+
+```
+
+#### 5.4.4 combined cluster plot GILL
+
+```{r cluster DE genes in GILL, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height= 7}
+
+plot_grid(plotlist = list(GILL_c1,GILL_c2,GILL_c3,GILL_c4), ncol = 2, labels = c("A","B","C","D")) 
+
+```
+
+#### 5.4.5 compare hc against fcm and km
+```{r cluster genes GILL, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(ppclust)
+res <- kmeans(scaledata.GILL, centers = 2)
+fcm.GILL <- fcm(scaledata.GILL, centers = 2)
+
+clusts <- inner_join(data.frame(gene = names(res$cluster),km.clust = res$cluster),
+                data.frame(gene = rownames(fcm.GILL$u), fcm.clust = fcm.GILL$cluster)
+                ) %>%
+  inner_join(clusters.GILL %>% select(tx, clust) %>% rename(gene = tx, hc.clust = clust))
+
+```
+
+
+### 5.4.6 compare viral load to other parameters in terms of DE
+
+```{r all GILL variable comparison, echo=FALSE, message=FALSE, warning = FALSE}
+
+print("DE Age_True")
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~sv1 + sv2 + sv3 + qpcr_Virus + Age_True )
+dds.GILL <- dds.GILL[filt,]
+dds.GILL <- DESeq(dds.GILL, reduced = ~sv1 + sv2 + sv3 + qpcr_Virus, test = "LRT")
+res <- results(dds.GILL, alpha = 0.05)
+summary(res)
+res.GILL_Age_True <- as.data.frame(res)
+
+print("DE Virus:Age_True")
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~sv1 + sv2 + sv3 + qpcr_Virus + Age_True + qpcr_Virus:Age_True )
+dds.GILL <- dds.GILL[filt,]
+dds.GILL <- DESeq(dds.GILL, reduced = ~sv1 + sv2 + sv3 + qpcr_Virus + Age_True, test = "LRT")
+res <- results(dds.GILL, alpha = 0.05)
+summary(res)
+res.GILL_Age_TrueVirus <- as.data.frame(res)
+
+de_test.GILL <- data.frame(
+  Explanatory_Variable = c("log10 qPCR count", "Age_True", "Virus:Age_True interaction"),
+  P05 =c(
+        res.GILL_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.GILL_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.GILL_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow()
+  ),
+  P01 =c(
+        res.GILL_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.GILL_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.GILL_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow()
+  )
+) 
+de_test.GILL %>% pivot_longer(data =., cols = c(P05, P01), names_to = "signif", values_to = "count") %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = signif)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(x = Explanatory_Variable, y = count, label = count), position = position_dodge(width = 0.9))
+
+
+```
+
+
+## 6 Differential Expression Kron 2023, Schmale ABD
+
+### 6.1 import read data and clean
+
+```{r import read data and clean ABD, echo=FALSE, message=FALSE, warning = FALSE, fig.width=4}
+
+Schmale_ABD_meta <- metadata_AAbV %>% filter(study == "Kron 2023" & Tissue == "ABD") %>%
+  mutate(Age_True_group= ifelse(Age_True < 10, 9,10)) %>%
+  inner_join(
+    read.csv("../../data/Schmale_B27_qPCR.csv"), by = c("Library.Name"="Sample_ID")
+  ) %>%
+  mutate(qpcr_Virus = log(qpcr_Virus+1,10)) %>%
+  mutate(category = ifelse(qpcr_Virus > 2, "High","Low"),
+         category_3 = case_when(
+           qpcr_Virus > 3 ~ "High",
+           qpcr_Virus > 2 ~ "Middle",
+           qpcr_Virus < 2 ~ "Low",
+           TRUE ~ "Uh-oh"
+         ))
+
+Schmale_ABD_meta %>%
+  ggplot(data =., aes(x = Viral_Load, y = qpcr_Virus)) +
+  geom_point()
+ 
+Schmale_ABD_meta %>%
+  pivot_longer( cols = c(Viral_Load, qpcr_Virus), names_to = "method", values_to = "expr") %>%
+  ggplot(data =., aes(x = method, y = expr, group = Library.Name)) +
+  geom_point() +
+  geom_line()
+
+txi_Schmale_ABD<- tximport( importer=read.delim, Schmale_ABD_files, type = "salmon", tx2gene = tx2gene)
+#Age_True not target variable, generally within a month or so, going to filter by half the sampels need to have an TPM of 1 or higher
+
+Schmale_ABD_TPM <- txi_Schmale_ABD$abundance
+
+
+filt <- Schmale_ABD_TPM[rowSums(Schmale_ABD_TPM > 1) > (ncol(Schmale_ABD_TPM)/2) ,] %>% rownames()# 7781
+
+
+table(Schmale_ABD_meta$category)
+
+Schmale_ABD_meta %>% ggplot(aes(x = Age_True, y = Viral_Load)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+```
+
+We see that despite being close in Age_True, Age_True and viral load have a clear covariance that needs to be addressed in the model. 
+
+### 6.2 surrogate variable analysis ABD
+
+#### 3.2.1 sva calculation
+
+```{r surrogate variable analysis ABD, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7}
+
+txi_Schmale_ABD<- tximport( importer=read.delim, Schmale_ABD_files, type = "salmon", tx2gene = tx2gene)
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~Age_True + qpcr_Virus)
+dds.ABD <- DESeq2::estimateSizeFactors(dds.ABD)
+counts <- counts(dds.ABD, normalized = TRUE)
+#counts <- counts[which(rowSums(counts) > 0),]
+counts <- counts[filt,]
+
+mod <- model.matrix(~Age_True + qpcr_Virus , data=Schmale_ABD_meta)
+mod0 <- model.matrix(~Age_True, data=Schmale_ABD_meta)
+svnum <- num.sv(counts, mod, method = "be") 
+svnum
+svobj <- svaseq(counts, mod, mod0, n.sv = svnum)
+#num sv is 1
+Schmale_ABD_meta$sv1 = svobj$sv[,1]
+
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1  + Age_True + qpcr_Virus)
+dds.ABD <- dds.ABD[filt,]
+vsd.ABD <- assay(vst(dds.ABD))
+
+
+```
+
+#### 6.2.2 sva visualization
+
+```{r surrogate variable figs ABD, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height=7}
+ABD_pc1 <- DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "sv1", ntop = 1000) + labs(color = "sv1")
+
+ABD_pc2 <- DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "Age_True", ntop = 1000) + labs(color = "Age_True (months)")
+ABD_pc3 <- DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "Viral_Load", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "Viral Load\n log10 CPM")
+
+ABD_pc4 <-DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "qpcr_Virus", ntop = 1000)+
+  scale_color_gradient(low = "black", high = "red") +
+  labs(color = "qPCR Virus\n log10 count")
+
+ABD_pc5 <-DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "category", ntop = 1000)
+
+ABD_pc6 <-DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), intgroup = "category_3", ntop = 1000)
+
+
+
+Schmale_ABD_meta <- Schmale_ABD_meta %>%
+  inner_join(. ,DESeq2::plotPCA(vst(dds.ABD,blind = FALSE), ntop = 1000, intgroup = "Viral_Load", return = TRUE) %>%
+  as.data.frame() %>% rownames_to_column("Library.Name") %>%
+  select(Library.Name, PC1, PC2))
+
+ABD_cors <- cor(Schmale_ABD_meta %>% select(PC1, PC2, sv1, Age_True, Viral_Load, qpcr_Virus))
+ABD_cors_p <- corPvalueFisher(ABD_cors, nrow(Schmale_ABD_meta))
+textMatrix_ABD = paste(signif(ABD_cors, 2), "\n(",
+signif(ABD_cors_p, 1), ")", sep = "");
+dim(textMatrix_ABD) = dim(ABD_cors)
+ABD_cors <- ABD_cors[c(1,2),c(3,4,5,6)]
+textMatrix_ABD <- textMatrix_ABD[c(1,2),c(3,4,5,6)]
+
+mat_ABD <- Heatmap(matrix = ABD_cors,
+        cell_fun = function(j,i,x,y,width,height,fill){
+          grid.text(textMatrix_ABD[i,j],x =x , y =y, gp = gpar(fontsize = 10))
+        },
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        name = "Pearson\ncorrelation",
+        column_names_side = "top",
+        column_labels = c("sv1","Age_True","Seq","qPCR"),
+        column_names_rot = 0, column_names_centered = TRUE)
+ABD_pc7 <- grid.grabExpr(draw(mat_ABD, padding = unit(c(1,1,0.5,0.5),"cm") ) )
+
+plot_grid(plotlist = list(ABD_pc1 , ABD_pc2,ABD_pc3,ABD_pc4,ABD_pc5,ABD_pc6,ABD_pc7),
+          ncol = 2, labels = c("A","B","C","D", "E"))
+
+
+
+
+
+
+```
+
+#### 6.2.3 sva corrected PCA
+
+```{r PCAtools ABD, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height=4}
+
+library(ppclust)
+
+vst <- assay(vst(dds.ABD,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Schmale_ABD_meta[,c("sv1")] )
+
+horn <- parallelPCA(mat)
+# horn$n
+# 4
+  
+p <- PCAtools::pca(mat, metadata = Schmale_ABD_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+elbow <- findElbowPoint(p$variance)
+# elbow
+# 6
+screeplot(p,
+    components = getComponents(p, 1:20),
+    vline = c(horn$n, elbow)) +
+
+    geom_label(aes(x = horn$n + 1, y = 50,
+      label = 'Horn\'s', vjust = -1, size = 8)) +
+    geom_label(aes(x = elbow + 1, y = 50,
+      label = 'Elbow method', vjust = -1, size = 8))
+
+ biplot(p,
+    lab = paste0(p$metadata$Age_True, 'months'),
+    colby = 'Viral_Load',
+    hline = 0, vline = 0,
+    legendPosition = 'right') +
+    scale_colour_gradient(low = 'blue', high = 'red2')
+  
+eigencorplot(p,
+    components = getComponents(p, 1:horn$n),
+    metavars = c('Age_True',
+      'Viral_Load','qpcr_Virus'),
+    col = c('darkblue', 'blue2', 'black', 'red2', 'darkred'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'Trait correlations',
+    colFrame = 'white',
+        plotRsquared = FALSE)
+
+
+eigencorplot(p,
+    components = getComponents(p, 1:5),
+    metavars = c('Age_True',
+      'qpcr_Virus',"Viral_Load"),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2,
+    fontCorval = 2,
+    rotLabX = 45,
+    scale = TRUE,
+    main = bquote(Principal ~ component ~ Pearson ~ r^2),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+
+
+```
+
+```{r pre and post PC correlations ABD }
+
+vst <- assay(vst(dds.ABD,blind = FALSE))
+
+vst <- assay(vst(dds.ABD,blind = FALSE))
+mat <- limma::removeBatchEffect(x = vst, covariates = Schmale_ABD_meta[,c("sv1")] )
+
+p1 <- PCAtools::pca(vst, metadata = Schmale_ABD_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+p2 <- PCAtools::pca(mat, metadata = Schmale_ABD_meta %>% column_to_rownames("Library.Name"), removeVar = 0.75, center = TRUE, scale = TRUE)
+
+PCA_ABD_pre <- eigencorplot(p1,
+    components = getComponents(p1, 1:2),
+    metavars = c('Age_True',
+      'qpcr_Virus', "sv1"),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = 'bottom',
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'pre correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_ABD_post <- eigencorplot(p2,
+    components = getComponents(p2, 1:2),
+    metavars = c('Age_True',
+      'qpcr_Virus'),
+    col = c('blue2','darkblue', 'black', 'darkred','red2'),
+    cexCorval = 0.7,
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 0,
+    posColKey = "bottom",
+    cexLabColKey = 1.5,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    cexMain = 1.5,
+    scale = FALSE,
+    main = 'post correction',
+    colFrame = 'white',
+        plotRsquared = FALSE) 
+
+PCA_ABD <- cowplot::plot_grid(plotlist = list(PCA_ABD_pre,PCA_ABD_post))
+
+
+```
+
+
+
+### 6.3 Differential expression LRT ABD
+
+```{r DE analysis in ABD, echo=FALSE, message=FALSE, warning = FALSE}
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1 + Age_True + qpcr_Virus )
+dds.ABD <- dds.ABD[filt,]
+dds.ABD <- DESeq(dds.ABD, reduced = ~sv1 + Age_True, test = "LRT")
+res <- results(dds.ABD, alpha = 0.05)
+summary(res)
+res.ABD_virus <- as.data.frame(res)
+count.ABD <- counts(dds.ABD, normalized = TRUE)
+vsd.ABD <- vst(dds.ABD)
+
+##get sig DE genes at p <= 0.01
+sig.ABD <-  rownames(res.ABD_virus %>% as.data.frame() %>% rownames_to_column("gene") %>% filter(padj <=0.05) %>% arrange(padj) %>% column_to_rownames("gene") )
+
+```
+
+### 6.4 Cluster DE genes ABD
+
+#### 6.4.1 heirarchical cluster
+
+```{r heirarchical cluster ABD, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(e1071)
+library(factoextra)
+library(NbClust)
+
+viral_order = (Schmale_ABD_meta %>% select(Library.Name, Viral_Load) %>% arrange(Viral_Load))$Library.Name
+
+#df <- as.data.frame(count.ABD) 
+df <- assay(vsd.ABD) 
+DEgenes <- df[sig.ABD,]
+scaled <- df
+corrected.ABD <- limma::removeBatchEffect(x = scaled, covariates = Schmale_ABD_meta$sv1)
+scaledata.ABD<- corrected.ABD[sig.ABD,viral_order] %>% t %>% scale %>% t 
+
+ABD_c1 <- factoextra::fviz_nbclust(x = scaledata.ABD, kmeans, method = "silhouette") +
+  labs(title = "")
+
+hr <- hclust(as.dist(1-cor(t(scaledata.ABD), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+geneTree = as.dendrogram(hr, method="average")
+# plot(geneTree,
+#      leaflab = "none",             
+#      main = "Gene Clustering",
+#      ylab = "Height")
+hclustk2 = cutree(hr, k=2)
+clusters <- hclustk2
+
+ABD_c2 <- ggdendrogram(hr, rotate = FALSE, size = 2, labels = FALSE) + 
+  theme(axis.text.x = element_blank())
+
+```
+
+#### 6.4.2 DE gene PCA
+
+```{r PCA of DE genes ABD, echo=FALSE, message=FALSE, warning = FALSE}
+
+pca.ABD <- prcomp(scaledata.ABD,scale = FALSE, center = FALSE)
+clusters.ABD <- prcomp(scaledata.ABD,scale = FALSE, center = FALSE)[[5]][,1:2] %>% as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(data.frame(tx = names(clusters), clust = clusters))
+ABD_c3 <- clusters.ABD %>%
+# prcomp(df) %>%
+  ggplot(data =., aes(x = PC1, y = PC2, color = as.character(clust ))) + 
+  geom_point() +
+  labs(x = paste0("PC1 (", round(summary(pca.ABD)$importance[2,1]*100,1), "%)"),
+       y= paste0("PC2 (", round(summary(pca.ABD)$importance[2,2]*100,1), "%)"),
+       color = "Cluster")+
+    scale_color_manual(labels = c("1", "2"), 
+                     values = c("cornflowerblue", "tomato"),
+                     guide = guide_legend(override.aes = list(size = 5) )) +
+    theme(legend.position="top")
+
+```
+
+#### 6.4.3 plot clusters scaled expression ABD
+
+```{r plot clusters scaled expression ABD, echo=FALSE, message=FALSE, warning = FALSE}
+
+test <- scaledata.ABD %>%
+  as.data.frame() %>%
+  rownames_to_column("tx") %>%
+  inner_join(.,data.frame(tx = names(clusters), clust = clusters)) %>%
+  pivot_longer(cols = -c(tx, clust), names_to = "Library.Name", values_to = "expr") %>%
+  inner_join(., Schmale_ABD_meta %>% select(qpcr_Virus, Library.Name)) %>%
+  group_by(clust, qpcr_Virus) %>%
+  summarise(mean = mean(expr), sd = sd(expr)) 
+
+labels <- clusters.ABD %>% group_by(clust) %>%
+  summarise(count = n()) %>%
+  mutate(label = paste0("n=",count)) %>% as.data.frame()
+
+ABD_c4 <- test %>%
+  ggplot(data = ., aes(x =qpcr_Virus, y = mean)) +
+  #geom_line(aes(x = Viral_Load, y = mean + 2*sd), linetype = "longdash") +
+  #geom_line(aes(x = Viral_Load, y = mean - 2*sd), linetype = "longdash") +
+  # geom_rect(aes(xmin = Viral_Load, ymax = mean + 2*sd,
+  #                  xmax = Viral_Load, ymin = mean + 2*sd)) +
+  geom_polygon( data = 
+                  data.frame(x= c(rev(test$qpcr_Virus), 
+                                  test$qpcr_Virus),
+                             y= c(rev(test$mean - 2*test$sd),
+                                  test$mean + 2*test$sd),
+                clust=  c(rev(test$clust), test$clust)),
+                aes( x=x, y=y), fill = "grey75"
+    )+
+  geom_line(color = "red", size = 1.5) +
+  geom_smooth(color = "black", linetype = 2, method = "glm", se = FALSE) +
+  #geom_smooth(method = "glm") +
+  geom_point(aes(x = qpcr_Virus, y = 0)) +
+  geom_text(data = labels, aes(label = label), x = 1.5, y = 3)+
+  scale_y_continuous(breaks = seq(-5,5,1)) +
+  theme_bw() +
+  facet_wrap(facets = "clust") +
+  labs(x = "Viral Load\nlog10 copies / ng RNA", y = "Scaled Expression")
+
+
+
+
+```
+
+#### 6.4.4 combined cluster plot ABD
+
+```{r cluster DE genes in ABD, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height= 7}
+
+plot_grid(plotlist = list(ABD_c1,ABD_c2,ABD_c3,ABD_c4), ncol = 2, labels = c("A","B","C","D")) 
+
+```
+
+#### 6.4.5 compare hc against fcm and km
+
+```{r cluster genes ABD, echo=FALSE, message=FALSE, warning = FALSE}
+
+library(ppclust)
+res <- kmeans(scaledata.ABD, centers = 2)
+fcm.ABD <- fcm(scaledata.ABD, centers = 2)
+
+clusts <- inner_join(data.frame(gene = names(res$cluster),km.clust = res$cluster),
+                data.frame(gene = rownames(fcm.ABD$u), fcm.clust = fcm.ABD$cluster)
+                ) %>%
+  inner_join(clusters.ABD %>% select(tx, clust) %>% rename(gene = tx, hc.clust = clust))
+
+```
+
+### 6.4.6 compare viral load to other parameters
+
+```{r all ABD variable comparison, echo=FALSE, message=FALSE, warning = FALSE}
+
+print("DE Age_True")
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1 + qpcr_Virus + Age_True )
+dds.ABD <- dds.ABD[filt,]
+dds.ABD <- DESeq(dds.ABD, reduced = ~sv1 + qpcr_Virus, test = "LRT")
+res <- results(dds.ABD, alpha = 0.05)
+summary(res)
+res.ABD_Age_True <- as.data.frame(res)
+
+print("DE Virus:Age_True")
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1 + qpcr_Virus + Age_True + qpcr_Virus:Age_True )
+dds.ABD <- dds.ABD[filt,]
+dds.ABD <- DESeq(dds.ABD, reduced = ~sv1  + qpcr_Virus + Age_True, test = "LRT")
+res <- results(dds.ABD, alpha = 0.05)
+summary(res)
+res.ABD_Age_TrueVirus <- as.data.frame(res)
+
+print("DE pairwise Wald test by high-low")
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1 + Age_True + category )
+dds.ABD <- dds.ABD[filt,]
+dds.ABD <- DESeq(dds.ABD)
+res <- results(dds.ABD, alpha = 0.05)
+summary(res)
+res.ABD.wald = as.data.frame(res)
+
+de_test.ABD <- data.frame(
+  Explanatory_Variable = c("log10 qpcr count", "Age_True", "Virus:Age_True interaction","High-low Wald test"),
+  P05 =c(
+        res.ABD_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.ABD_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.ABD_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow(),
+        res.ABD.wald  %>% rownames_to_column("gene") %>% filter(padj <= 0.05) %>% select(gene) %>% nrow()
+  ),
+  P01 =c(
+        res.ABD_virus %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.ABD_Age_True %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.ABD_Age_TrueVirus  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow(),
+        res.ABD.wald  %>% rownames_to_column("gene") %>% filter(padj <= 0.01) %>% select(gene) %>% nrow()
+  )
+) 
+
+de_test.ABD %>% pivot_longer(data =., cols = c(P05, P01), names_to = "signif", values_to = "count") %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = signif)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(x = Explanatory_Variable, y = count, label = count), position = position_dodge(width = 0.9))
+
+
+
+```
+
+
+##Sparsity check for all datasets
+
+```{r sparsity of datasets, fig.height= 5, echo=FALSE, fig.width=5}
+
+rowSums(Schmale_ABD_TPM > 1) %>% hist(main = "Schmale ABD",labels = TRUE, breaks = ncol(Schmale_ABD_TPM)) 
+abline(v = ncol(Schmale_ABD_TPM)/2)
+rowSums(Schmale_GILL_TPM > 1) %>% hist(main = "Schmale Gill",labels = TRUE,breaks = ncol(Schmale_GILL_TPM))
+abline(v = ncol(Schmale_GILL_TPM)/2)
+rowSums(Kron_BSC_TPM > 1) %>% hist(main = "Kron BSC",labels = TRUE,breaks = ncol(Kron_BSC_TPM))
+abline(v = ncol(Kron_BSC_TPM)/2)
+rowSums(Kron_PVC_TPM > 1) %>% hist(main = "Kron PVC",labels = TRUE,breaks = ncol(Kron_PVC_TPM))
+abline(v = ncol(Kron_BSC_TPM)/2)
+
+```
+
+Here we see that the abdominal and gill data has a higher number of genes with a TPM of 1 in only one sample, what I call "near-zeros" which are funcitonally useless for analysis. Similarly, they have lower TPM of 1 in 100% of samples genes, IE universally expressed. These likely go hand in hand and are related to sequencing depth and method. These sets also have a lower number of replicates and thus have lower power for analysis of this kind. Overall, this explains the lower DE ammounts in the Schmale datasets. 
+
+## 7 save DE data
+
+```{r save results for later, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+
+clusters.BSC <- name_clusters(clusters.BSC, assay(vsd.BSC), Kron_BSC_meta, "Run")
+clusters.PVC<- name_clusters(clusters.PVC, assay(vsd.PVC), Kron_PVC_meta, "Run")
+clusters.GILL <- name_clusters(clusters.GILL, assay(vsd.GILL), Schmale_GILL_meta, "Library.Name")
+clusters.ABD <- name_clusters(clusters.ABD, assay(vsd.ABD), Schmale_ABD_meta, "Library.Name")
+
+save(file = "../../data/rdata/virus_res.R", 
+     res.PVC_virus,
+     res.BSC_virus,
+     res.ABD_virus,
+     res.GILL_virus,
+     res.Greer_virus,
+     vsd.PVC,
+     vsd.BSC,
+     vsd.Greer,
+     vsd.GILL,
+     vsd.ABD
+)
+
+save(file = "../../data/rdata/clusters.R", 
+     clusters.BSC,
+     clusters.PVC,
+     clusters.Greer,
+     clusters.GILL,
+     clusters.ABD
+)
+
+res_list <- list(res.BSC_virus, res.BSC_Age_True, res.BSC_Age_TrueVirus,
+             res.PVC_virus, res.PVC_Age_True, res.PVC_Age_TrueVirus,
+             res.ABD_virus, res.ABD_Age_True, res.ABD_Age_TrueVirus,
+             res.GILL_virus, res.GILL_Age_True, res.GILL_Age_TrueVirus)
+
+names(res_list) <- c("BSC_virus", "BSC_Age", "BSC_AgeVirus",
+             "PVC_virus", "PVC_Age", "PVC_AgeVirus",
+             "ABD_virus", "ABD_Age", "ABD_AgeVirus",
+             "GILL_virus", "GILL_Age", "GILL_AgeVirus")
+
+library("openxlsx")
+
+write.xlsx(res_list, file = "../../figures/all_DE.xlsx", row.names = TRUE)
+
+
+```
+
+```{r all virus clusters plot, fig.height=5, fig.width=7, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+p<- cowplot::plot_grid(plotlist = list(BSC_c4, PVC_c4,ABD_c4, GILL_c4), ncol = 2, labels = c("A","B","C","D"))
+p
+cowplot::save_plot(filename = "../../figures/all_clusters_shape.pdf",plot = p, base_height = 5, base_width = 7)
+
+
+```
+
+```{r clustering components for supplement, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, include = FALSE, fig.height=6, fig.width=3}
+
+
+p <- cowplot::plot_grid(plotlist = list(
+  BSC_c1,BSC_c2,
+  PVC_c1,PVC_c2,
+  ABD_c1,ABD_c2,
+  GILL_c1, GILL_c2
+), ncol = 2, labels = c("A","","B","","C","","D"), scale = 0.85)
+p
+cowplot::save_plot(filename = "../../figures/all_clustering_silhouette_supplement.pdf",plot = p, base_height = 9, base_width = 6)
+
+
+```
+
+```{r compare DE for all variables across datasets, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+data.frame(
+explanatory_variable = c(
+  rep(c("Virus","Age:Virus","Age"),4)
+),
+Tissue = c(
+  rep("BSC",3),
+  rep("PVC",3),
+  rep("ABD",3),
+  rep("GILL",3)
+),
+SRA_study = c(
+  rep("SRP268155",6),
+  rep("SRP446535",6)
+),
+DE_count = c(
+res.BSC_virus %>% filter(padj <= 0.01) %>% nrow(),
+res.BSC_Age_TrueVirus %>% filter(padj <= 0.01) %>% nrow(),
+res.BSC_Age_True %>% filter(padj <= 0.01) %>% nrow(),
+res.PVC_virus %>% filter(padj <= 0.01) %>% nrow(),
+res.PVC_Age_TrueVirus %>% filter(padj <= 0.01) %>% nrow(),
+res.PVC_Age_True %>% filter(padj <= 0.01) %>% nrow(),
+res.ABD_virus %>% filter(padj <= 0.05) %>% nrow(),
+res.ABD_Age_TrueVirus %>% filter(padj <= 0.05) %>% nrow(),
+res.ABD_Age_True %>% filter(padj <= 0.05) %>% nrow(),
+res.GILL_virus %>% filter(padj <= 0.05) %>% nrow(),
+res.GILL_Age_TrueVirus %>% filter(padj <= 0.05) %>% nrow(),
+res.GILL_Age_True %>% filter(padj <= 0.05) %>% nrow()
+)
+) %>%
+  mutate(header = paste0(SRA_study,"\n",Tissue)) %>%
+  ggplot(data =., aes(x = header, y = DE_count, fill = explanatory_variable, label = DE_count))+
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = .9), vjust = -0.5) +
+  labs(x = "Data Set", y = "Number of Differentially Expressed Genes", fill = "Explanatory\nVariable")+
+  theme_bw() 
+
+
+rbind(
+de_test.BSC,
+de_test.PVC,
+de_test.ABD %>% filter(Explanatory_Variable != "High-low Wald test"),
+de_test.GILL
+) %>%
+  droplevels() %>%
+  mutate(Tissue = c(
+  rep("BSC",3),
+  rep("PVC",3),
+  rep("ABD",3),
+  rep("GILL",3)
+),
+SRA_study = c(
+  rep("SRP268155",6),
+  rep("SRP446535",6)
+)) %>%
+  mutate(header = paste0(SRA_study,"\n",Tissue)) %>%
+  mutate(Explanatory_Variable =
+           case_when(
+             Explanatory_Variable %in% c("log10 qpcr count",
+                                         "log10 qPCR count",
+                                         "log10 Virus TPM") ~ "Virus",
+             Explanatory_Variable == "Virus:Age_True interaction" ~ "Age:Virus",
+             Explanatory_Variable == "Age_True" ~ "Age"
+           )) %>%
+  pivot_longer(cols = c(P05,P01), names_to = "alpha", values_to = "count") %>%
+  mutate(alpha = ifelse(alpha == "P05", "0.05", "0.01")) %>%
+  ggplot(data =., aes(x = Explanatory_Variable, y = count, fill = alpha, label = count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(position = position_dodge(width = .9), vjust = -0.25) +
+  labs(x = "Explanatory Variable", y = "Number of Differentially Expressed Genes", fill = "alpha")+
+  theme_bw() +
+  coord_cartesian(ylim = c(0,3500))+
+  facet_wrap(facets = ~header, scales = "free")
+ggsave("../../figures/DE_gene_all_variables.pdf", device = "pdf", width = 7, height = 5)
+
+```
+
+
+
+
+## 8 compare/contrast viral results
+
+```{r all PCA corr, fig.height=12, fig.width=4, echo=FALSE, warning = FALSE, message=FALSE, error=FALSE}
+
+
+cowplot::plot_grid(plotlist = list(PCA_BSC, PCA_PVC,PCA_ABD,PCA_GILL,PCA_Greer), ncol = 1, labels = "AUTO")
+
+```
+
+
+```{r get all viral gene identifiers, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+viral_DE <- c(
+rownames(res.PVC_virus %>% filter(padj <= 0.01)),
+rownames(res.BSC_virus %>% filter(padj <= 0.01)),
+rownames(res.ABD_virus %>% filter(padj <= 0.05)),
+rownames(res.GILL_virus %>% filter(padj <= 0.05)),
+rownames(res.Greer_virus %>% filter(padj <= 0.05))
+) %>% unique()
+
+
+all_clust <- c(
+  clusters.BSC$tx,
+  clusters.PVC$tx,
+  clusters.ABD$tx,
+  clusters.GILL$tx,
+  clusters.Greer$tx
+)
+
+```
+
+
+```{r load data and check some genes}
+
+load(file = "../../data/rdata/virus_res.R")
+load(file = "../../data/rdata/clusters.R")
+
+```
+
+
+### 8.1 Chi-square enrichment tests
+
+```{r enrichment test for immune genes of all clusters, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+
+
+immune_enrichments <- rbind(
+  enrich_immune(
+    res.BSC_virus,
+    (clusters.BSC %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.PVC_virus,
+    (clusters.PVC %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.ABD_virus,
+   (clusters.ABD %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.GILL_virus,
+    (clusters.GILL %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.BSC_virus,
+    (clusters.BSC %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.PVC_virus,
+    (clusters.PVC %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.ABD_virus,
+    (clusters.ABD %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  ),
+  enrich_immune(
+    res.GILL_virus,
+    (clusters.GILL %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes
+  )
+) %>%
+  mutate(
+    cluster = c(
+      "BSC_UP",
+      "PVC_UP",
+      "ABD_UP",
+      "GILL_UP",
+      "BSC_DOWN",
+      "PVC_DOWN",
+      "ABD_DOWN",
+      "GILL_DOWN"
+    ),
+    SRA_study = c(
+  rep(c(rep("SRP268155",2),
+  rep("SRP446535",2)),2)
+    )
+  )
+  
+immune_enrichments$p.adj_BH = p.adjust(immune_enrichments$p.value, method = "BH", n = 8)
+immune_enrichments$p.adj_bonferroni = p.adjust(immune_enrichments$p.value, method = "bonferroni", n = 8)
+immune_enrichments$p.adj_hochberg = p.adjust(immune_enrichments$p.value, method = "hochberg", n = 8)
+    
+  
+ immune_enrichments <- immune_enrichments %>% rowwise() %>%
+  mutate(Tissue = str_split_1(cluster, "_")[[1]],
+         direction = str_split_1(cluster, "_")[[2]],
+         dataset = paste0(SRA_study," ", Tissue),
+         sig = ifelse(p.adj_BH <= 0.05, TRUE,FALSE)) %>%
+  select(SRA_study, Tissue, dataset, direction, cluster, sig, p.value,p.adj_bonferroni,p.adj_hochberg,p.adj_BH, everything())
+
+
+immune_enrichments
+write.csv(immune_enrichments, file = "../../figures/All_tissues_clusters_immune_enrichments.csv",quote = FALSE)
+
+
+```
+
+```{r plot chi-square test, fig.width=16, fig.height=8}
+
+plot_list <- list(
+  enrich_immune_plot(
+    res.BSC_virus,
+    (clusters.BSC %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="BSC UP", correct_n = 8
+  ),
+    enrich_immune_plot(
+    res.BSC_virus,
+    (clusters.BSC %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="BSC DOWN", correct_n = 8
+  ),
+  enrich_immune_plot(
+    res.PVC_virus,
+    (clusters.PVC %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="PVC UP", correct_n = 8
+  ),
+    enrich_immune_plot(
+    res.PVC_virus,
+    (clusters.PVC %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="PVC DOWN", correct_n = 8
+  ),
+  enrich_immune_plot(
+    res.ABD_virus,
+   (clusters.ABD %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="ABD UP", correct_n = 8
+  ),
+    enrich_immune_plot(
+    res.ABD_virus,
+    (clusters.ABD %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes,set_title = "ABD DOWN", correct_n = 8
+  ),
+  enrich_immune_plot(
+    res.GILL_virus,
+    (clusters.GILL %>% filter(direction == "UP"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title ="GILL UP", correct_n = 8
+  ),
+  enrich_immune_plot(
+    res.GILL_virus,
+    (clusters.GILL %>% filter(direction == "DOWN"))$tx %>% str_remove(., "gene-"),
+    immune_genes, set_title = "GILL DOWN", correct_n = 8
+  )
+)
+
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 2, labels = "AUTO")
+p
+cowplot::save_plot("../../figures/chisquare_immune_enrich_viral_de.pdf",p,ncol = 2, base_height = 12, base_width = 6,device = pdf)
+
+```
+
+
+Here we see that all Up regulated clusters across datasets are significantly enriched for immune genes while the Down regulated ones are not. 
+
+### 8.2 Look at cluster overlaps
+
+### 8.2.1 Upsetplot
+
+```{r upset plot, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE}
+us <- reduce(.f=function(df1,df2) full_join(df1,df2, by = "tx"), 
+      .x = list(
+  clusters.PVC %>%
+  select(tx) %>% mutate(PVC = 1),
+clusters.BSC %>%
+  select(tx) %>% mutate(BSC = 1),
+clusters.ABD %>%
+  select(tx) %>% mutate(ABD = 1),
+clusters.GILL %>%
+  select(tx) %>% mutate(GILL = 1)
+)) %>%
+  mutate(across(where(is.numeric), coalesce, 0)) %>% distinct() %>%
+  column_to_rownames("tx") 
+
+
+
+UpSetR::upset(
+  data = us,
+  keep.order = TRUE,
+  group.by = "freq")
+
+# library(ComplexUpset)
+# 
+# us2 <- us %>% rownames_to_column("gene") %>%
+#   mutate(Gene_accessions = str_remove(gene, "gene-")) %>% 
+#   left_join(immune_genes) %>%
+#   mutate(immune = ifelse(is.na(Type), FALSE, TRUE))
+# 
+# upset(data = us2, c(
+#     "BSC_UP",
+#     "PVC_UP",
+#     "ABD_UP",
+#     "GILL_UP",
+#     "BSC_DOWN",
+#     "PVC_DOWN",
+#     "ABD_DOWN",
+#     "GILL_DOWN"
+#   ),
+#       stripes=upset_stripes(
+#         mapping=aes(color=direction),
+#         colors=c(
+#             'UP'='tomato',
+#             'DOWN'='cornflowerblue'
+#         ),
+#         data=set.metadata),
+#   base_annotations=list(
+#         'Intersection size'=intersection_size(
+#             counts=FALSE,
+#             mapping=aes(fill=immune)
+#         ) + scale_fill_manual(values=c(
+#             'TRUE'='red', 'FALSE'='grey50')
+#     )),
+#     width_ratio=0.1
+# )
+
+
+```
+
+Upset plot depicting overlap of significantly DE genes across datasets. This is not partitioned for directionality of expression. What we see when we partition for clusters (next figure) is that all genes that are common among all 4 datasets are in UP clusters, and 109/140 in the neural datasts are UP, and 230/369 in sensory neurons are UP. 
+
+```{r upset clusters plot, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, fig.width=5, fig.height=4.5}
+us <- reduce(.f=function(df1,df2) full_join(df1,df2, by = "tx",), 
+      .x = list(
+  clusters.PVC %>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(PVC_UP = 1),
+clusters.PVC %>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(PVC_DOWN = 1),
+clusters.BSC%>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(BSC_UP = 1),
+clusters.BSC%>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(BSC_DOWN = 1),
+clusters.ABD%>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(ABD_UP = 1),
+clusters.ABD%>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(ABD_DOWN = 1),
+clusters.GILL%>% filter(direction == "UP") %>%
+  select(tx) %>% mutate(GILL_UP = 1),
+clusters.GILL%>% filter(direction == "DOWN") %>%
+  select(tx) %>% mutate(GILL_DOWN = 1)
+)) %>%
+  mutate(across(where(is.numeric), coalesce, 0)) %>% distinct() %>%
+  mutate(tx2 = tx)%>%
+  column_to_rownames("tx2") 
+
+
+set.metadata <- data.frame(
+  set =c(
+    "BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP",
+    "BSC_DOWN",
+    "PVC_DOWN",
+    "ABD_DOWN",
+    "GILL_DOWN"
+  ),
+  direction = c( rep("UP",4), rep("DOWN",4))
+)
+
+dir <- function(row, direction){
+  col["direction"] == direction
+}
+
+Myfunc <- function(row, set) {
+    data <- (row["tx"] %in% set)
+}
+
+pdf(file = "../../figures/Clusters_Upset_plot.pdf", height = 2, width = 7)
+UpSetR::upset(
+  data = us,
+  sets = rev(c(
+    "BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP",
+    "BSC_DOWN",
+    "PVC_DOWN",
+    "ABD_DOWN",
+    "GILL_DOWN"
+  )),
+  queries = list(
+    list(query = Myfunc,
+         params = list(paste0("gene-",immune_genes$Gene_accessions)),
+         color = "goldenrod",
+         active = T)),
+  keep.order = TRUE,
+  group.by = "freq",
+  sets.bar.color = c(rep("blue", 4), rep("red", 4)),
+  set.metadata = list(data = set.metadata,
+                      plots = list(
+                        list(type = "matrix_rows", 
+                             column = "direction", colors = c(UP = "tomato", DOWN = "cornflowerblue"), 
+    alpha = 0.5))))
+dev.off()
+
+```
+
+Upset plot visualizes the number of genes in a unique intersection class. We see that down and up regulated clusters have minimal overlap between datasets. I adjusted the p-value threshold for the Schmale datasets up to 0.05 to account for the decrease in power. There is a big influence of set size on the intersection, with Schmale set sizes being smaller and lower in power. For this reason the 4 and 3 way intersections are not as large as perhaps they could be. We see that we have 41 upregulated in all 4 datasets, 109 common to to all brain datasets, and 230 common to sensory neurons. This scaling is intuitive to me, as we should assume greater overlap in more like tissues, and the same in larger set sizes. I am still working out how to calculate deviance to tell us if these overlaps are significant. That said, we have a suite of genes to look at for general, neural, and sensory specific virus responses. 
+
+```{r up cluster ovarlap with immune genes, fig.height=12, fig.width= 5, echo = FALSE,warning=FALSE, message=FALSE,error=FALSE}
+
+mat.ha <- immune_genes %>% filter(Gene_accessions %in% (rownames(us[us[,c("BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP")] %>% rowSums() >= 2,]) %>% str_remove(., "gene-"))
+) %>% mutate(Gene_accessions = paste0("gene-",Gene_accessions)) %>%
+  unique() %>%
+  distinct_at("Gene_accessions", .keep_all = TRUE) %>% select(Subtype, Gene_accessions)
+
+mat = us[us[,c("BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP")] %>% rowSums() >= 2,][,c("BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP")]
+
+mat.ha <-mat %>% rownames_to_column("Gene_accessions") %>% inner_join(mat.ha) %>%
+  rownames_to_column("at") %>%
+  mutate(at = as.numeric(at)) %>%
+  select(at,Subtype) %>%
+  rename(label = Subtype)
+
+ha <-  rowAnnotation(foo = anno_mark(at = mat.ha$at, labels = mat.ha$label, labels_gp = gpar(fontsize = 6)))
+
+
+
+Heatmap(matrix = mat
+) + ha
+
+
+```
+
+Presence absence heatmap of genes for the Up clusters among the 4 datasets. ADAR is among those genes common across all datasets. 
+
+```{r immune genes in overlaps,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE, eval = FALSE}
+
+
+immune_genes %>% inner_join(.,
+data.frame(Gene_accessions =
+  intersect(
+(clusters.PVC %>% filter(direction == "UP"))$tx,
+(clusters.BSC %>% filter(direction == "UP"))$tx
+) # 405
+ %>% str_remove(.,"gene-") # 150
+)
+)
+
+
+immune_genes %>% inner_join(.,
+data.frame(Gene_accessions = intersect(
+  intersect(
+(clusters.PVC %>% filter(direction == "UP"))$tx,
+(clusters.BSC %>% filter(direction == "UP"))$tx
+) ,
+(clusters.ABD %>% filter(direction == "UP"))$tx
+) %>% str_remove(.,"gene-") # 150
+)
+)
+
+
+
+```
+
+```{r save cluster assignment, immune information, warning = FALSE, echo = FALSE, message=FALSE, error=FALSE, include = FALSE}
+
+us_immune <- us %>% mutate(Gene_accessions = str_remove(tx,"gene-")) %>%
+  left_join(immune_genes) %>% select(-tx)
+us_immune <- distinct_at(us_immune,.vars = "Gene_accessions",.keep_all = TRUE)
+write.csv(us_immune, file = "../../figures/us_immune.csv", quote = FALSE)
+
+us_immune %>% filter(! is.na(Subtype))
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 1 &
+      ! is.na(Subtype) )
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & ! is.na(Subtype) )
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 &! is.na(Subtype) ) %>%
+  group_by(Subtype, Subtype_name) %>%
+  summarise(genes = paste0(Gene_accessions, collapse = ", "))
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1&! is.na(Subtype) ) %>%
+  group_by(Type) %>%
+  summarise(Subtypes = paste0(unique(Subtype), collapse = ", "),
+            Subtypes = paste0(unique(Subtype_name), collapse = ", "),
+            genes = paste0(unique(Gene_accessions), collapse = ", ")
+            )
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 0 &! is.na(Subtype) ) %>%
+  group_by(Type) %>%
+  summarise(Subtypes = paste0(unique(Subtype), collapse = ", "),
+            Subtype_names = paste0(unique(Subtype_name), collapse = ", "),
+            genes = paste0(unique(Gene_accessions), collapse = ", ")
+            )
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 0 &! is.na(Subtype) ) %>%
+  group_by(Subtype) %>%
+  summarise(Subtypes = paste0(unique(Subtype), collapse = ", "),
+            Subtype_names = paste0(unique(Subtype_name), collapse = ", "),
+            genes = paste0(unique(Gene_accessions), collapse = ", ")
+            )
+
+##all
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 1 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 1 ) %>%
+  nrow()
+
+#neural
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 0 &
+         PVC_DOWN == 0 & BSC_DOWN == 0 & ABD_DOWN == 0 & GILL_DOWN == 0 &
+         ! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_DOWN == 1 & BSC_DOWN == 1 & ABD_DOWN == 1 & GILL_DOWN == 0  ) %>%
+  nrow()
+
+#sensory
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 0 & GILL_UP == 0 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 1 & BSC_UP == 1 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_DOWN == 1 & BSC_DOWN == 1 ) %>%
+  nrow()
+
+#Gill
+us_immune %>%
+filter(PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 1 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 1 ) %>%
+  nrow()
+
+us_immune %>%
+filter(GILL_UP == 1 &! is.na(Subtype) ) %>%
+  nrow()
+
+us_immune %>%
+filter(GILL_UP == 1 ) %>%
+  nrow()
+
+```
+
+```{r fig.height= 12, fig.width=12}
+
+us_immune %>% 
+  filter(! is.na(Subtype)) %>%
+  pivot_longer(cols = c(-Gene_accessions, -Group, -Type, -Subtype_name, -Subtype), names_to = "cluster", values_to = "presence") %>%
+  inner_join(
+    us_immune %>%
+      #filter(! is.na(Subtype)) %>%
+      pivot_longer(cols = c(-Gene_accessions, -Group, -Type, -Subtype_name, -Subtype), names_to = "cluster", values_to = "presence") %>%
+      group_by(cluster) %>%
+      summarise(size = sum(presence))
+  ) %>%
+  group_by(cluster,Group, Type, Subtype, size) %>%
+  summarise(count = sum(presence)) %>%
+  mutate(prop = count / size) %>%
+  ggplot(aes(x = Subtype, y = prop, fill = cluster)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(facets = ~Type, scales = "free")
+
+```
+
+```{r compare immune annot across viral clusters,  fig.height= 6, fig.width=3}
+
+immune_intersections <- us_immune %>% 
+  filter(! is.na(Subtype)) %>%
+  select(-PVC_DOWN, -BSC_DOWN, -ABD_DOWN, -GILL_DOWN) %>%
+  mutate(sum = PVC_UP+BSC_UP+GILL_UP+ABD_UP) %>%
+  filter(sum > 0) %>%
+  select(-sum) %>%
+  mutate(
+    intersection = case_when(
+      (PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 1) ~ "All",
+      (PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 0) ~ "Neural",
+      (PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 0 & GILL_UP == 0) ~ "Sensory",
+      (PVC_UP == 1 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 0) ~ "PVC",
+      (PVC_UP == 0 & BSC_UP == 1 & ABD_UP == 0 & GILL_UP == 0) ~ "BSC",
+      (PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 1 & GILL_UP == 0) ~ "ABD",
+      (PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 1) ~ "GILL",
+      ##here beings the weirdness
+      # (PVC_UP == 1 & BSC_UP == 1 & ABD_UP == 0 & GILL_UP == 1) ~ "Sensory + GILL",
+      # (PVC_UP == 0 & BSC_UP == 1 & ABD_UP == 0 & GILL_UP == 1) ~ "BSC + GILL",
+      # (PVC_UP == 1 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 1) ~ "PVC + GILL",
+      # (PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 1 & GILL_UP == 1) ~ "ABD + GILL",
+      # (PVC_UP == 1 & BSC_UP == 0 & ABD_UP == 1 & GILL_UP == 0) ~ "PVC + ABD",
+      # (PVC_UP == 0 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 0) ~ "BSC + ABD",
+      # (PVC_UP == 0 & BSC_UP == 1 & ABD_UP == 1 & GILL_UP == 1) ~ "BSC + ABD + GILL",
+      # (PVC_UP == 1 & BSC_UP == 0 & ABD_UP == 1 & GILL_UP == 1) ~ "PVC + ABD + GILL",
+      TRUE ~ "Other"
+    )
+  ) %>%
+ mutate(intersection = factor(intersection,
+                      levels = c("All","Neural","Sensory",
+                                 "BSC","PVC","ABD","GILL", "Other"))
+       ) %>%
+  filter( ! is.na(intersection) ) 
+
+immune_intersections2 <- immune_intersections %>%
+  select(Group, Type, Subtype, Subtype_name, intersection, Gene_accessions)
+
+immune_intersections2 %>%
+  ggplot(aes(x = intersection)) +
+  geom_bar(stat = "count") +
+  facet_wrap(facets = ~Type)
+
+immune_intersections2 %>%
+  ggplot(aes(x = Subtype, fill = intersection)) +
+  geom_bar(stat = "count", color = "black") +
+  facet_wrap(facets = ~Type, scales = "free_x", ncol = 3) +
+  scale_y_continuous(minor_breaks = seq(0,30,1)) +
+  theme_bw()+
+  scale_fill_manual(
+    values = c(
+      "All"="#F8766D",
+      "Neural" = "#D39200",
+      "Sensory" = "#93AA00",
+      "BSC" = "#00BA38",
+      "PVC" = "#00C19F",
+      "ABD" = "#00B9E3",
+      "GILL" = "#DB72FB",
+      "Other"="grey50"
+    )
+  ) +
+  theme(
+    axis.text.x = element_text(angle = -45, hjust = 0, vjust =0.5)
+  )
+ggsave("../../figures/immune_gene_types_by_cluster.pdf", device = "pdf",
+       height = 12, width = 6, units = "in")
+
+immune_intersections %>% arrange(Type, Subtype) %>% write_delim("~/Desktop/immune_hits.txt", delim = "\t")
+
+
+
+subtype_level_intersect <- immune_intersections %>% group_by(Group, Type, Subtype) %>%
+  summarise(
+    PVC_UP = sum(PVC_UP),
+    BSC_UP = sum(BSC_UP),
+    ABD_UP = sum(ABD_UP),
+    GILL_UP = sum(GILL_UP)
+  )%>%
+  mutate(
+    intersection = case_when(
+      (PVC_UP >= 1 & BSC_UP >= 1 & ABD_UP >= 1 & GILL_UP >= 1) ~ "All",
+      (PVC_UP>=1 & BSC_UP>=1 & ABD_UP>=1 & GILL_UP == 0) ~ "Neural",
+      (PVC_UP>=1 & BSC_UP>=1 & ABD_UP == 0 & GILL_UP == 0) ~ "Sensory",
+      (PVC_UP>=1 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP == 0) ~ "PVC",
+      (PVC_UP == 0 & BSC_UP>=1 & ABD_UP == 0 & GILL_UP == 0) ~ "BSC",
+      (PVC_UP == 0 & BSC_UP == 0 & ABD_UP>=1 & GILL_UP == 0) ~ "ABD",
+      (PVC_UP == 0 & BSC_UP == 0 & ABD_UP == 0 & GILL_UP>=1) ~ "GILL",
+      TRUE ~ "Other"
+    )
+  ) %>%
+ mutate(intersection = factor(intersection,
+                      levels = c("All","Neural","Sensory",
+                                 "BSC","PVC","ABD","GILL", "Other"))
+       ) %>%
+  filter( ! is.na(intersection) ) 
+
+# subtype_level_intersect %>% filter(intersection == "All")
+# 
+# subtype_level_intersect %>% filter(Subtype == "ABCF1")
+#   
+# immune_intersections %>% filter(Subtype == "ABCF1")
+# 
+# immune_intersections %>% filter(
+#   intersection == "Other" & Subtype == "HSP90"
+# )
+
+
+```
+
+
+### 8.3 Heatmap
+
+```{r heatmap ,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE,  fig.height=9, fig.width=7}
+
+hm_meta <- metadata_AAbV %>% 
+  mutate( ID = ifelse(str_detect(Study_Nickname,"Schmale"),Library.Name,Run)) %>%
+  select(ID,BioProject, SRA_Study, Tissue, Age_True, Study_Nickname, Viral_Load) %>%
+  arrange(Study_Nickname, Viral_Load)
+
+###to do this have to rebuild these without filtering so there is not gene drop-out/NAs for downstream stuff
+
+##BSC
+dds.BSC <- DESeqDataSetFromTximport(txi_Kron_BSC, Kron_BSC_meta, ~sv1 + sv2 + Age_True + Viral_Load)
+dds.BSC <- DESeq2::estimateSizeFactors(dds.BSC)
+vsd.BSC <- assay(vst(dds.BSC))
+scaleData.BSC <- limma::removeBatchEffect(x = vsd.BSC, covariates = Kron_BSC_meta[,c("sv1","sv2")] ) %>% t() %>% scale() %>% t()
+scaleData.BSC[scaleData.BSC == "NaN"] <- 0 
+ 
+##PVC
+dds.PVC <- DESeqDataSetFromTximport(txi_Kron_PVC, Kron_PVC_meta, ~sv1 + Age_True + Viral_Load)
+dds.PVC <- DESeq2::estimateSizeFactors(dds.PVC)
+vsd.PVC <- assay(vst(dds.PVC))
+scaleData.PVC <- limma::removeBatchEffect(x = vsd.PVC, covariates = Kron_PVC_meta[,c("sv1")] ) %>% t() %>% scale() %>% t()
+scaleData.PVC[scaleData.PVC == "NaN"] <- 0 
+
+#Greer
+dds.Greer <- DESeqDataSetFromTximport(txi_Greer_PVC, Greer_PVC_meta, ~sv1 + Age_True + Viral_Load)
+dds.Greer <- DESeq2::estimateSizeFactors(dds.Greer)
+vsd.Greer <- assay(vst(dds.Greer))
+scaleData.Greer <- limma::removeBatchEffect(x = vsd.Greer, covariates = Greer_PVC_meta[,c("sv1")] ) %>% t() %>% scale() %>% t()
+scaleData.Greer[scaleData.Greer == "NaN"] <- 0 # to correct for 0 variance genes (e.g. all 0 in dataset)
+
+##ABD
+dds.ABD <- DESeqDataSetFromTximport(txi_Schmale_ABD, Schmale_ABD_meta, ~sv1 + Age_True + qpcr_Virus )
+dds.ABD <- DESeq2::estimateSizeFactors(dds.ABD)
+vsd.ABD <- assay(vst(dds.ABD))
+scaleData.ABD <- limma::removeBatchEffect(x = vsd.ABD, covariates = Schmale_ABD_meta[,c("sv1")] ) %>% t() %>% scale() %>% t()
+scaleData.ABD[scaleData.ABD == "NaN"] <- 0
+
+##GILL
+dds.GILL <- DESeqDataSetFromTximport(txi_Schmale_GILL, Schmale_GILL_meta, ~sv1 + sv2 + sv3 + Age_True + qpcr_Virus)
+dds.GILL <- DESeq2::estimateSizeFactors(dds.GILL)
+vsd.GILL <- assay(vst(dds.GILL))
+scaleData.GILL <- limma::removeBatchEffect(x = vsd.GILL, covariates = Schmale_GILL_meta[,c("sv1","sv2","sv3")] ) %>% t() %>% scale() %>% t()
+scaleData.GILL[scaleData.GILL == "NaN"] <- 0
+
+all_expr <- reduce(
+  .f=function(df1,df2) full_join(df1,df2, by = "gene"),
+  .x = list(
+    scaleData.BSC %>% as.data.frame() %>% rownames_to_column("gene"),
+    scaleData.PVC %>% as.data.frame() %>% rownames_to_column("gene"),
+    scaleData.Greer %>% as.data.frame() %>% rownames_to_column("gene"),
+    scaleData.ABD %>% as.data.frame() %>% rownames_to_column("gene"),
+    scaleData.GILL %>% as.data.frame() %>% rownames_to_column("gene")
+  )
+) %>% column_to_rownames("gene")
+
+all_expr <- all_expr[viral_DE,]
+
+ha_clusters_meta <- data.frame(tx = rownames(all_expr)) %>%
+  full_join(clusters.BSC %>% select(tx, direction) %>% rename(BSC = direction)) %>%
+  full_join(clusters.PVC %>% select(tx, direction) %>% rename(PVC = direction)) %>%
+  full_join(clusters.ABD %>% select(tx, direction) %>% rename(ABD= direction)) %>%
+  full_join(clusters.GILL %>% select(tx, direction) %>% rename(GILL = direction)) %>% 
+  column_to_rownames("tx") %>%
+  as.matrix()
+
+# ha_mark_meta <- data.frame(Gene_accessions = rownames(all_expr) %>% str_remove(.,"gene-")) %>%
+#   rownames_to_column("at") %>%
+#   mutate(at = as.numeric(at)) %>%
+#   full_join(immune_genes %>%
+#               select(Gene_accessions, Subtype) %>%
+#               rename(labels = Subtype)) %>%
+#   filter(!is.na(labels)) %>%
+#   select(-Gene_accessions) %>%
+#   filter(labels %in% c("ADAR","APOBEC3"))
+
+# ha_immune_meta <- data.frame(Gene_accessions = rownames(all_expr) %>% str_remove(.,"gene-")) %>%
+#   left_join(immune_genes) %>%
+#   select(Gene_accessions, Subtype) %>%
+#   mutate(immune = ifelse(is.na(Subtype),NA,"immune")) %>%
+#   select(-Subtype) %>%
+#   distinct() %>%
+#   column_to_rownames("Gene_accessions") %>% as.matrix()
+#     
+
+
+ha_clusters <- rowAnnotation( cluster = ha_clusters_meta,
+                                 # immune_genes = anno_mark(at = ha_mark_meta$at, 
+                                 #                          labels = ha_mark_meta$labels, 
+                                 #                          labels_gp = gpar(fontsize = 6)
+                                 #                          ),
+                              col = list(
+                                cluster = c("UP" = "red", "DOWN" = "blue", "NA"="grey50"),
+                                ))
+ha_top_annot <- columnAnnotation(viral_load = anno_barplot(hm_meta$Viral_Load))
+
+all_expr <- all_expr[,hm_meta$ID]
+
+library(ComplexHeatmap)
+
+pdf(file = "../../figures/clusters_heatmap.pdf", width = 7, height = 9)
+ComplexHeatmap::Heatmap(all_expr,
+        show_row_names = FALSE, 
+        show_column_names = FALSE,
+        cluster_columns = FALSE,
+        name = "Scaled Expression",
+        #row_split = 3,
+        column_split = paste0(hm_meta$SRA_Study,"\n", hm_meta$Tissue),
+        column_title_gp = gpar(fontsize = 7),
+        top_annotation = ha_top_annot) + 
+  ha_clusters 
+
+dev.off()
+
+
+
+```
+
+Gene expression heatmap demonstrating conserved patterns among studies. The heatmap renders the scaled, variance stabilized expression of all genes that were marked as significantly DE in at least 1 dataset. The annotation to the right (secondary heatmap) depicts which dataset and directional cluster the gene was placed in, showing overlap of clusters. The hierarchical cluster of the main heatmap splits it into three major groupings, genes generally down across datasets, gene generally up across datasets, and genes with mixed profiles across datasets. The barplots at the top show the log10 viral CPM of each dataset. Genes of interest are mark (ADAR, APOBEC3)/ I think the interesting takeaway is that the expression trends of these genes are consistent across multiple datasets, more so among neural datasets than with gill, but the power of the experimental design leads to quite a lot of genes dropping out of consideration. This does make me wonder if a full scale redo of the WGCNA analysis, at least for all neural samples, would make sense.  
+
+### 8.4 KEGG analysis
+
+```{r fig.height=9}
+
+library(clusterProfiler)
+
+l <- list(
+clusters.BSC %>% rename(gene = tx) %>% filter(direction == "UP") %>% inner_join(gene2ko) %>% 
+  unique() %>% mutate(Tissue = "BSC", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.PVC %>% rename(gene = tx) %>% filter(direction == "UP") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "PVC", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.ABD %>% rename(gene = tx) %>% filter(direction == "UP") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "ABD", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.GILL %>% rename(gene = tx) %>% filter(direction == "UP") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "GILL", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.BSC %>% rename(gene = tx) %>% filter(direction == "DOWN") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "BSC", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.PVC %>% rename(gene = tx) %>% filter(direction == "DOWN") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "PVC", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.ABD %>% rename(gene = tx) %>% filter(direction == "DOWN") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "ABD", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster),
+clusters.GILL %>% rename(gene = tx) %>% filter(direction == "DOWN") %>% inner_join(gene2ko) %>% 
+  unique()%>% mutate(Tissue = "GILL", cluster = paste0(Tissue,"_",direction)) %>% select(gene,ko,direction, Tissue, cluster)
+)
+
+res.kegg.all <- lapply(l, function(x){
+enrichKEGG(
+  gene = x$ko,
+  organism = "ko"
+)
+})
+
+names(res.kegg.all) <- c("BSC_UP","PVC_UP","ABD_UP","GILL_UP","BSC_DOWN","PVC_DOWN","ABD_DOWN","GILL_DOWN")
+
+kegg_res <- lapply(names(res.kegg.all), function(x){
+  as.data.frame(res.kegg.all[x]) %>%
+    mutate(cluster = x) %>%
+    rename("Description" = paste0(x,".","Description")) %>%
+    rownames_to_column("ID") %>%
+    select(ID,cluster,Description) %>%
+    mutate(presence = 1)
+}) %>%
+  do.call("rbind",.) %>%
+  pivot_wider(id_cols=c(ID,Description), names_from = cluster, values_from = presence,values_fill = 0) 
+
+kegg_res %>%
+  filter(BSC_UP == 1 & PVC_UP ==1 & ABD_UP == 1 & GILL_UP ==1)
+
+kegg_multi_expr <- purrr::reduce(
+  .x = l,
+  .f=function(df1,df2) full_join(df1,df2)
+) %>% select(ko, cluster) %>%
+  mutate(presence = ifelse(str_detect(cluster, "UP"),1,-1)) %>%
+  distinct() %>% 
+  pivot_wider(id_cols = ko, names_from = cluster, values_from = presence, values_fill = 0) %>%
+  column_to_rownames("ko")
+
+library(pathview)
+pathview(gene.data = kegg_multi_expr, 
+         pathway.id = "ko05164",
+         species = "ko",
+         keys.align = "y",
+         kegg.native = T, 
+         match.data = F, 
+         multi.state = T, 
+         same.layer = T)
+
+library("openxlsx")
+res.kegg.all %>% lapply(., as.data.frame) %>% write.xlsx(., file = "../../figures/all_kegg_res.xlsx", rowNames = TRUE)
+
+kegg_res %>% filter(
+  BSC_UP == 1 & PVC_UP ==1 & ABD_UP ==1 & GILL_UP == 1
+)
+
+kegg_res %>% filter(
+  BSC_UP == 1 & PVC_UP ==1 & ABD_UP ==1 & GILL_UP == 0
+)
+
+
+kegg_res %>% filter(
+  BSC_UP == 1 & PVC_UP ==1 
+)
+
+kegg_res %>% filter(
+  BSC_DOWN == 1 & PVC_DOWN ==1 & ABD_DOWN ==1
+)
+
+kegg_res %>% filter(
+  BSC_DOWN == 1
+)
+
+kegg_res %>% filter(
+  BSC_DOWN == 1 & PVC_DOWN ==1 & ABD_DOWN ==1 
+)
+
+kegg_res %>% filter(
+  BSC_DOWN == 0 & PVC_DOWN == 0 & ABD_DOWN == 0 & GILL_DOWN == 1
+)
+
+kegg_res %>% filter(
+  BSC_UP == 0 & PVC_UP ==0 & ABD_UP ==0 & GILL_UP == 1
+)
+
+res.kegg.all[1][[1]] %>% as.data.frame() %>% select(ID,Description,geneID) %>% separate_longer_delim(.,cols = geneID, delim = "/")
+
+heatplot(res.kegg.all[6][[1]])
+res.kegg.all[6][[1]] %>% as.data.frame()
+
+	
+
+
+```
+
+```{r KEGG upset, fig.width = 4}
+
+ComplexUpset::upset(data = kegg_res,intersect = c("BSC_UP","PVC_UP","ABD_UP","GILL_UP","BSC_DOWN","PVC_DOWN","ABD_DOWN","GILL_DOWN"))
+
+pdf(file = "../../figures/KEGG_Upset_plot.pdf", height = 2, width = 4)
+UpSetR::upset(
+  data = kegg_res %>% select(-Description) %>% column_to_rownames("ID"),
+  sets = rev(c(
+    "BSC_UP",
+    "PVC_UP",
+    "ABD_UP",
+    "GILL_UP",
+    "BSC_DOWN",
+    "PVC_DOWN",
+    "ABD_DOWN",
+    "GILL_DOWN"
+  )),
+  keep.order = TRUE,
+  group.by = "freq",
+  
+  sets.bar.color = c(rep("blue", 4), rep("red", 4)))
+dev.off()
+
+
+colSums(kegg_res[,3:10])
+
+```
+
+
+## 9 compare WGCNA data to viral load
+
+```{r,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+load("../../data/rdata/Consensus_NetworkConstruction_man.R")
+load("../../data/rdata/Consensus_dataInput.R")
+load("../../data/rdata/AplCalGFF3v1.21_Tabular.R")
+
+gene2module <- data.frame(
+tx = colnames(multiExpr[[1]]$data) %>% str_remove(.,"[.][123]"),
+module = moduleColors
+) %>% inner_join(Complete_AplCal_map) %>% select(gene, module) %>%
+  mutate(gene = paste0("gene-",gene))
+
+```
+
+### 9.1 Relate ME to external traits for each individual set
+```{r, warning = FALSE, echo = FALSE, message=FALSE, error=FALSE, fig.height=8, fig.width=16}
+
+exprSize = checkSets(multiExpr)
+nSets = exprSize$nSets;
+
+# Set up variables to contain the module-trait correlations
+moduleTraitCor = list();
+moduleTraitPvalue = list();
+
+
+Traits[[1]]$data$Mean_TTR <- as.numeric(Traits[[1]]$data$Mean_TTR)
+Traits[[2]]$data$Mean_TTR <- as.numeric(Traits[[2]]$data$Mean_TTR)
+
+Traits[[1]]$data <- inner_join(
+  Traits[[1]]$data %>% as.data.frame() %>% rownames_to_column("Library.Name"), 
+  Kron_BSC_meta %>% select(Library.Name, Viral_Load)) %>% column_to_rownames("Library.Name") %>% as.matrix()
+Traits[[2]]$data <- left_join(
+  Traits[[2]]$data %>% as.data.frame() %>% rownames_to_column("Library.Name"), 
+  Kron_PVC_meta %>% select(Library.Name, Viral_Load)) %>% column_to_rownames("Library.Name") %>% as.matrix()
+
+
+# Calculate the correlations
+for (set in 1:nSets)
+{
+moduleTraitCor[[set]] = cor(consMEs[[set]]$data, Traits[[set]]$data, use = "p");
+moduleTraitPvalue[[set]] = corPvalueFisher(moduleTraitCor[[set]], exprSize$nSamples[set]);
+}
+
+# Convert numerical lables to colors for labeling of modules in the plot
+MEColors = labels2colors(as.numeric(substring(names(consMEs[[1]]$data), 3)));
+MEColorNames = paste("ME", MEColors, sep="");
+# Open a suitably sized window (the user should change the window size if necessary)
+
+#pdf(file = "../figures/ModuleTraitRelationships_by_tissue.pdf", wi = 16, he = 7);
+# Plot the module-trait relationship table for set number 1
+
+par(mfrow = c(1,2))
+
+set = 1
+textMatrix = paste(signif(moduleTraitCor[[set]], 2), "\n(",
+signif(moduleTraitPvalue[[set]], 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor[[set]])
+par(mar = c(6, 8.8, 3, 2.2));
+labeledHeatmap(Matrix = moduleTraitCor[[set]],
+xLabels = colnames(Traits[[set]]$data),
+yLabels = MEColorNames,
+ySymbols = MEColorNames,
+colorLabels = FALSE,
+colors = blueWhiteRed(50),
+textMatrix = textMatrix,
+setStdMargins = FALSE,
+cex.text = 0.5,
+zlim = c(-1,1),
+showCols = c(4,5),
+main = paste("Module--trait relationships in", setLabels[set]))
+
+# Plot the module-trait relationship table for set number 2
+set = 2
+textMatrix = paste(signif(moduleTraitCor[[set]], 2), "\n(",
+signif(moduleTraitPvalue[[set]], 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor[[set]])
+
+#pdf(file = "Plots/ModuleTraitRelationships-male.pdf", wi = 10, he = 7);
+par(mar = c(6, 8.8, 3, 2.2));
+
+labeledHeatmap(Matrix = moduleTraitCor[[set]],
+xLabels = colnames(Traits[[set]]$data),
+yLabels = MEColorNames,
+ySymbols = MEColorNames,
+colorLabels = FALSE,
+colors = blueWhiteRed(50),
+textMatrix = textMatrix,
+setStdMargins = FALSE,
+cex.text = 0.5,
+zlim = c(-1,1),
+showCols = c(4,5),
+main = paste("Module--trait relationships in", setLabels[set]))
+
+#dev.off()
+
+par(mfrow = c(1,1))
+
+```
+
+consensus modules from the WGCNA paper in both BCS and PVC have a higher magnitude and smaller p-value of correlation to viral load than Age_True, with previously non-significant/marginally significant modules greenyellow and darkgreen now firmly significant for viral load in both. 
+
+
+```{r, warning = FALSE, echo = FALSE, message=FALSE, error=FALSE, fig.width=5, fig.height=7}
+
+# Initialize matrices to hold the consensus correlation and p-value
+consensusCor = matrix(NA, nrow(moduleTraitCor[[1]]), ncol(moduleTraitCor[[1]]));
+consensusPvalue = matrix(NA, nrow(moduleTraitCor[[1]]), ncol(moduleTraitCor[[1]]));
+# Find consensus negative correlations
+negative = moduleTraitCor[[1]] < 0 & moduleTraitCor[[2]] < 0;
+consensusCor[negative] = pmax(moduleTraitCor[[1]][negative], moduleTraitCor[[2]][negative]);
+consensusPvalue[negative] = pmax(moduleTraitPvalue[[1]][negative], moduleTraitPvalue[[2]][negative]);
+# Find consensus positive correlations
+positive = moduleTraitCor[[1]] > 0 & moduleTraitCor[[2]] > 0;
+consensusCor[positive] = pmin(moduleTraitCor[[1]][positive], moduleTraitCor[[2]][positive]);
+consensusPvalue[positive] = pmax(moduleTraitPvalue[[1]][positive], moduleTraitPvalue[[2]][positive]);
+
+textMatrix = paste(signif(consensusCor, 2), "\n(",
+signif(consensusPvalue, 1), ")", sep = "");
+textMatrix <-textMatrix %>% str_replace_all(string =., pattern = "NA\\n\\(NA\\)", replacement = "No Concensus")
+dim(textMatrix) = dim(moduleTraitCor[[set]])
+
+
+#pdf(file = "../figures/ModuleTraitRelationships_consensus.pdf", wi = 6, he = 6);
+par(mar = c(2, 6, 3, 2.2));
+labeledHeatmap(Matrix = consensusCor, 
+               xLabels = colnames(Traits[[set]]$data),
+               yLabels = MEColorNames,
+               ySymbols = stringr::str_remove(MEColorNames, "ME"),
+               colorLabels = TRUE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 0.5,
+               cex.lab = 0.75,
+               xLabelsAngle = 0,
+               xLabelsAdj = 0.5,
+               zlim = c(-1,1),
+               main = paste("Consensus module--trait relationships across\n",
+                            paste(setLabels, collapse = " and "))
+               )
+#dev.off()
+
+#pdf(file = "../figures/ModuleTraitRelationships_consensus_Age_True_NC.pdf", wi = 3, he = 4);
+par(mar = c(2, 6, 1, 1));
+labeledHeatmap(Matrix = consensusCor,
+               xLabels = colnames(Traits[[set]]$data),
+               yLabels = MEColorNames,
+               ySymbols = stringr::str_remove(MEColorNames, "ME"),
+               colorLabels = TRUE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 0.6,
+               cex.lab = 0.75,
+               xLabelsAngle = 0,
+               xLabelsAdj = 0.5,
+               zlim = c(-1,1),
+               showCols = c(4,5),
+               showRows = 1:12,
+               main = NULL
+               )
+#dev.off()
+
+
+
+```
+
+The higher magnitude of correlation and lower p-value of that significance is reflected in the consensus data, with darkgreen and greenyellow being recruited to the ranks of significance and high module-trait relationship like orange and pink. 
+
+
+```{r look at WGCNA,  warning = FALSE, echo = FALSE, message=FALSE, error=FALSE}
+
+module2color <- data.frame(module = moduleColors, number = moduleLabels) %>% unique() 
+module2color$number <- as.character(module2color$number)
+
+print("PVC")
+rbind(
+consMEs[[2]]$averageExpr
+) %>% rownames_to_column("Library.Name") %>%
+  pivot_longer(data = ., cols = -Library.Name, names_to = "number", values_to = "ME") %>%
+  mutate(number = str_remove(number, "ME")) %>%
+  inner_join(module2color) %>%
+  inner_join(metadata_AAbV %>% select(Library.Name, Age_True, Tissue, Viral_Load) ) %>%
+  filter(Tissue == "PVC") %>%
+  ggplot(data = ., aes(x = Viral_Load, y = ME)) +
+  geom_point() +
+  geom_smooth(color = "black") +
+  facet_wrap(facets = c("module"))
+
+print("BSC")
+rbind(
+consMEs[[1]]$averageExpr
+) %>% rownames_to_column("Library.Name") %>%
+  pivot_longer(data = ., cols = - Library.Name, names_to = "number", values_to = "ME") %>%
+  mutate(number = str_remove(number, "ME")) %>%
+  inner_join(module2color) %>%
+  inner_join(metadata_AAbV %>% select(Library.Name, Age_True, Tissue, Viral_Load) ) %>%
+  filter(Tissue == "BSC") %>%
+  ggplot(data = ., aes(x = Viral_Load, y = ME)) +
+  geom_point() +
+  geom_smooth(color = "black") +
+  facet_wrap(facets = c("module"))
+
+
+print("Consensus")
+rbind(
+consMEs[[1]]$averageExpr,
+consMEs[[2]]$averageeExpr
+) %>% rownames_to_column("Library.Name") %>%
+  pivot_longer(data = ., cols = - Library.Name, names_to = "number", values_to = "ME") %>%
+  mutate(number = str_remove(number, "ME")) %>%
+  inner_join(module2color) %>%
+  inner_join(metadata_AAbV %>% select(Library.Name, Age_True, Tissue, Viral_Load) ) %>%
+  ggplot(data = ., aes(x = Viral_Load, y = ME)) +
+  geom_point() +
+  geom_smooth(color = "red") +
+  facet_wrap(facets = c("module"))
+
+
+```
+
+# 10 Variant analysis for ADAR and APOBEC3 signatures
+
+```{r look at GATK variants, fig.width = 7, echo=FALSE,message=FALSE,error=FALSE,warning=FALSE}
+
+#rebuild meta with outliers
+metadata_AAbV <- read.delim("../../data/metadata/metadata_AAbV.txt", header = TRUE, sep = "\t")
+
+metadata_AAbV <- metadata_AAbV %>% 
+  mutate(Viral_Load = log((Uniquely_mapped_reads_number_Virus/Number_of_input_reads * 1000000) + 1,10),
+         ID = ifelse(str_detect(Study_Nickname, "Schmale"), Library.Name,Run),
+         header = paste0(SRA_Study,"\n",Tissue)
+  )
+
+
+## load variant data
+
+variant_files <- list.files(path="../../data/bams/GATK", pattern="_variants_filtered_mutec.vcf$", full.names = TRUE)
+
+allVars <- lapply(variant_files, FUN = function(x){
+vars <- read.delim(x, sep = "\t", skip = 68) %>%
+  filter(FILTER == "PASS") %>%
+  select(POS, REF, ALT, QUAL, FILTER, 10) %>%
+  mutate(ID = basename(x) %>% str_remove("_variants_filtered_mutec.vcf"))
+colnames(vars) <- c("POS", "REF", "ALT", "QUAL", "FILTER", "DAT", "ID")
+if(nrow(vars) == 0){
+  return(vars)
+}
+vars <- vars %>%
+  rowwise() %>%
+  mutate(AF = as.numeric(str_split(DAT, ":")[[1]][[3]]),
+         Depths = str_split(DAT, ":")[[1]][[2]],
+         Ref_depth = as.numeric(str_split(Depths,",")[[1]][[1]]),
+         Alt_depth = as.numeric(str_split(Depths,",")[[1]][[2]]))
+
+}) %>% do.call(what = "rbind")
+
+##get mutations annotated for sample metadata
+ 
+mutations <- allVars %>% 
+  inner_join(
+    metadata_AAbV ) %>%
+  unique() 
+
+## annotate mutations for ADAR and APOBEC3 type mutations
+mutations <-
+  mutations %>%
+   rowwise()%>%
+    filter(nchar(x = REF, type = "chars")==1 && nchar(x=ALT, type = "chars")==1)%>%
+    mutate(MUTATION = paste0(REF,">", ALT)) %>%
+    mutate(type = case_when(
+      MUTATION %in% c("A>G","T>C") ~ "ADAR",
+      MUTATION %in% c("C>T","G>A") ~ "APOBEC",
+      TRUE ~ ""
+    )) %>%
+    mutate(header = paste0(SRA_Study, "\n",Tissue)) 
+
+##quantify how many times a mutation occurs in a study, this is to find strain level fixed mutations and eliminate them
+mutation_occurance  <- mutations %>%
+  group_by(POS, Study_Nickname) %>%
+  summarise(count = n()) %>%
+  inner_join(
+    mutations %>% select(Study_Nickname,ID) %>% distinct() %>% group_by(Study_Nickname) %>% summarise(study_count = n())
+  ) %>%
+  mutate(prop_samples = count / study_count)
+
+#filter mutations such that there must be at least 1 reference allele detected so as to show this is a point mutation and not a strain level mutation (not a perfect solution as if the mutation was inudced early on and then became dominant we may never see the reference even if its not in the strain level base)
+unique_mutations <-
+  inner_join(mutations, mutation_occurance) %>%
+  #filter(count == 1)
+  filter(Ref_depth >= 1)
+
+
+##set as factor for plotting
+unique_mutations <- unique_mutations %>%
+  mutate(MUTATION = factor(MUTATION, levels = sort(unique(unique_mutations$MUTATION))))
+
+
+allVars %>% group_by(ID) %>%
+  summarise(count = n())
+
+allVars %>% 
+  inner_join(metadata_AAbV %>% select(ID,Study_Nickname))  %>% 
+  group_by(Study_Nickname) %>%
+  summarise(count = n())
+
+unique_mutations %>% filter(! type == "") %>% nrow()
+
+
+unique_mutations
+
+```
+
+```{r exploratory plots of variant data, echo=FALSE,message=FALSE,error=FALSE,warning=FALSE }
+
+##mutation number as a function of input viral
+allVars %>% group_by(ID) %>% summarise(count = n()) %>%
+  inner_join(metadata_AAbV %>% select(Viral_Load, ID)) %>%
+  ggplot(data = ., aes(x = Viral_Load, y = count)) +
+  geom_point()
+  #geom_bar(stat = "identity")
+
+
+uniqueSNP <- lapply(variant_files, FUN = function(x){
+vars <- read.delim(x, sep = "\t", skip = 68) %>%
+  filter(FILTER == "PASS") %>%
+  select(POS, ID, REF, ALT, QUAL, FILTER) %>%
+  mutate(ID = basename(x) %>% str_remove("_variants_filtered_mutec.vcf"))
+}) %>% do.call(what = "rbind") %>%
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1) %>%
+  group_by(POS) %>%
+  summarise(count = n()) %>%
+  filter(count < 2) %>% select(POS)
+
+#425 @ <1/5
+#278 @ <2
+
+allVars %>% inner_join(uniqueSNP) %>% group_by(REF, ALT) %>%
+  summarise(count = n()) %>%
+  ggplot(data =., aes(x = paste0(REF, ">",ALT), y = count, fill = REF)) +
+  geom_bar(stat= "identity")
+
+```
+
+```{r plot variant frequencies, fig.height= 7, fig.width=5, echo=FALSE,message=FALSE,error=FALSE,warning=FALSE}
+
+##plot mutation frequencies for all datasets
+plot_list <- lapply(rev(sort(unique(unique_mutations$header))), FUN = function(x){
+  unique_mutations %>% 
+    filter(header == x) %>%
+    ggplot(data = ., aes(x = MUTATION, label = type)) +
+    geom_bar(stat = "count") +
+    geom_text(stat = "count",hjust = 1.1,  vjust = 0.5, size = 2, fontface = "bold", angle = 90, color = "white") + 
+    labs(title = x, x = "SNP Type") +
+    theme_classic() +
+    scale_x_discrete(limits =levels(unique_mutations$MUTATION))+
+    theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
+          legend.position = "none",
+          plot.title = element_text(hjust = 0.5)
+    )
+})
+
+##plot for combined data
+all_plot <- unique_mutations %>%
+ggplot(data = ., aes(x = MUTATION, label = type)) +
+    geom_bar(stat = "count") +
+    geom_text(stat = "count",hjust = 1.1,  vjust = 0.5, size = 2, fontface = "bold", angle = 90, color = "white") + 
+    labs(title = "All Data Sets", x = "SNP Type") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
+          legend.position = "none",
+          plot.title = element_text(hjust = 0.5))
+
+##add it to plot list
+plot_list[[6]] <-all_plot
+
+#plot the grid
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 2, labels = c("A","B","C","D","E","F"))
+p
+#save plot
+cowplot::save_plot(filename = "../../figures/mutation_analysis.pdf" ,plot = p, ncol = 2, base_width = 3, base_height = 7)
+
+
+```
+
+```{r chisquare on mutations, fig.height= 5, fig.width=7, echo=FALSE,message=FALSE,error=FALSE,warning=FALSE}
+
+mut_contigency <- unique_mutations %>%
+  group_by(MUTATION,Study_Nickname) %>%
+  summarise(sum = length(MUTATION)) %>%
+  ungroup() %>%
+  pivot_wider(., names_from = Study_Nickname, values_from = sum, values_fill = NA) %>%
+  column_to_rownames("MUTATION") %>%
+  mutate_if(is.integer, ~replace(., is.na(.), 0)) %>%
+  mutate(All = Reduce(`+`, .))
+
+chi_Greer <- chisq.test(x = mut_contigency[,1])
+chi_BSC <- chisq.test(x = mut_contigency[,2])
+chi_PVC <- chisq.test(x = mut_contigency[,3])
+chi_ABD <- chisq.test(x = mut_contigency[,4])
+chi_GILL <- chisq.test(x = mut_contigency[,5])
+chi_All <-chisq.test(x = mut_contigency[,6])
+
+mut_residuals <- data.frame(
+  Greer = round(chi_Greer$residuals,1),
+BSC = round(chi_BSC$residuals,1),
+PVC = round(chi_PVC$residuals,1),
+ABD = round(chi_ABD$residuals,1),
+GILL = round(chi_GILL$residuals,1),
+All = round(chi_All$residuals,1),
+row.names = rownames(mut_contigency)
+)
+mut_residuals <- t(mut_residuals)
+
+mut_chi  <- data.frame(
+  Greer = format(chi_Greer$statistic, digits = 2),
+BSC = format(chi_BSC$statistic, digits = 2),
+PVC = format(chi_PVC$statistic, digits = 2),
+ABD = format(chi_ABD$statistic,digits = 2),
+GILL = format(chi_GILL$statistic, digits = 2),
+All = format(chi_All$statistic,digits = 2),
+row.names = "X"
+) %>% t()
+
+mut_p <- data.frame(
+  Greer = format(chi_Greer$p.value,format = "e", digits = 2),
+BSC = format(chi_BSC$p.value,format = "e", digits = 2),
+PVC = format(chi_PVC$p.value,format = "e", digits = 2),
+ABD = format(chi_ABD$p.value,format = "e", digits = 2),
+GILL = format(chi_GILL$p.value,format = "e", digits = 2),
+All = format(chi_All$p.value,format = "e", digits = 2),
+row.names = "p"
+) %>% t() %>%
+  cbind(mut_chi) %>%
+  as.data.frame() %>%
+  rowwise() %>%
+  mutate(padj = p.adjust(p, method = "BH",6),
+         text = paste0(
+           "n=",
+           chi_BSC$parameter,
+           "\n",
+           "X\U000B2= ",
+                       X,
+                       "\n",
+                       "p= ",
+                       p,
+                       "\n",
+                       "p.BH= ",
+                       padj))
+
+
+
+mut_chi <- lapply(list(chi_Greer, chi_BSC, chi_PVC, chi_ABD, chi_GILL, chi_All),
+       function(x){
+         
+         paste0(
+           "Res=", round(x$stdres,1), ", ",
+           "\n",
+           "Ex=",round(x$expected,1), ", ",
+           "\n",
+           "Ob=",x$observed
+         )
+       }) %>%
+  do.call("cbind",.)
+rownames(mut_chi) <- rownames(mut_contigency)
+colnames(mut_chi) <- c("Greer","BSC","PVC","ABD","GILL","ALL")
+mut_chi <- t(mut_chi)
+
+
+deaminase_map <-
+  c("A>C" = " ", "A>G" = "ADAR", "A>T" = " ", 
+    "C>A" = " ", "C>G"  = " ", "C>T" = "APOBEC", 
+    "G>A" = "APOBEC", "G>C" = " ", "G>T" = " ", 
+    "T>A" = " ", "T>C" = "ADAR", "T>G" = " ")
+
+ha_deam = HeatmapAnnotation(
+    #deaminase = anno_text(x = deaminase_map, which = "column",rot = 0, just = 0.5),
+  deaminase = anno_simple(deaminase_map, pch = deaminase_map,
+  col = c("ADAR"="tomato2", "APOBEC" = "gold3", " "="white"),
+  pt_gp = gpar(col = "white", fontface = "bold")
+  )
+)
+
+ha_pval = rowAnnotation(deaminase = anno_text(x = mut_p$text, which = "row"))
+
+pdf(file = "../../figures/deaminase_mut_chisq_heatmap.pdf", width = 12, height = 8)
+ComplexHeatmap::Heatmap(mut_residuals, 
+                        name = "Standardized\nResiduals",
+                        row_names_side = "left",
+                        column_names_side = "top",
+                        column_names_centered = TRUE,
+                        top_annotation = ha_deam,
+                        right_annotation = ha_pval,
+       # cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
+      #  grid.text(mut_chi[i, j], x, y)},
+                        column_names_rot = 0
+)
+
+dev.off()
+
+chi_GILL$stdres
+chi_BSC$parameter
+
+```
+
+
+####PRINT R SESSION
+```{r}
+
+sessionInfo() 
+
+sessionInfo() %>% write_lines(., file = "../../figures/Rsession.txt")
+```
+

@@ -1,0 +1,63 @@
+Description,Domains,IPR_ID,Pfam_ID,Notes,Alt,AQ,CI,HM,NV,SM,CG,LG,CT,HR,CE,DM,SP,BF,DR,GG,MM,HS
+domains involved in pathogen recognition and clearance ,SRCR,IPR001190,PF00530,Scavenger receptor cysteine-rich domain,,301,11,10,73,5,71,17,67,20,2,5,426,143,26,32,28,25
+domains involved in pathogen recognition and clearance ,CTLD,IPR001304,PF00059,Lectin C-type domain,,1,73,71,98,10,273,126,221,111,263,38,283,690,126,49,114,84
+domains involved in pathogen recognition and clearance ,CTLD,IPR016187,N/A,C-type lectin fold,,5,102,78,107,14,352,146,250,167,275,0,0,733,150,71,135,109
+domains involved in pathogen recognition and clearance ,LDLRa,IPR002172,PF00057,low density lipoprotein receptors class A,,6,77,21,44,15,94,61,122,60,32,41,186,226,45,37,47,48
+domains involved in pathogen recognition and clearance ,LDLRB,IPR000033,PF00058,"Low-density lipoprotein receptor, YWTD repeat",,20,23,16,22,0,43,21,32,12,7,10,97,51,16,14,14,15
+domains involved in pathogen recognition and clearance ,IG,IPR007110,PF13895,Immunoglobulin-like,,352,100,107,266,77,284,199,210,224,76,137,448,411,688,416,827,697
+domains involved in pathogen recognition and clearance ,Ig_E-set,IPR014756,N/A,Immunoglobulin E-set,,151,71,44,95,22,100,57,97,65,51,0,0,131,107,67,93,93
+domains involved in pathogen recognition and clearance ,Ig_I-set,IPR013098,PF07679,Immunoglobulin I-set,,178,74,82,153,31,167,98,115,115,38,58,110,296,178,154,191,187
+domains involved in pathogen recognition and clearance ,LRR,IPR001611,"PF00560,PF13516,PF13855",Leucine Rich Repeat,,101,113,53,115,50,131,104,343,101,47,89,418,687,217,152,183,190
+domains involved in pathogen recognition and clearance ,VWA,IPR002035,"PF00092,PF13519,PF13768","von Willebrand factor, type A",,57,114,64,173,10,166,75,108,47,53,12,65,178,71,57,80,83
+domains involved in pathogen recognition and clearance ,FBG,IPR002181,PF00147,"complement system, fibrinogen-C-terminal domain",,257,69,24,187,0,205,51,141,116,5,15,59,214,48,30,31,32
+domains involved in pathogen recognition and clearance ,Galectin,IPR001079,PF00337,carbohydrate recognition domain,,5,3,0,0,2,11,1,5,1,25,6,1,1,11,8,12,15
+domains involved in pathogen recognition and clearance ,FA58C,IPR000421,PF00754,"Coagulation factor 5/8 type, C-terminal",,3,18,55,379,8,111,40,153,31,3,7,144,280,36,18,24,24
+domains involved in pathogen recognition and clearance ,RIG-I_C-RD,IPR021673,PF11648,C-terminal domain of RIG-I,,2,1,0,0,0,8,0,0,0,0,0,0,5,0,2,3,3
+domains involved in pathogen recognition and clearance ,HELICc,IPR001650,PF00271,"DNA/RNA helicase, C-terminal",,196,161,94,104,76,123,63,95,91,79,77,131,98,84,86,107,108
+domains involved in pathogen recognition and clearance ,AA(NACHT) ,IPR007111,PF05729,NACHT nucleoside triphosphatase,,196,6,4,44,0,0,1,90,0,1,1,213,60,208,5,32,23
+domains involved in pathogen recognition and clearance ,C1q ,IPR001073,PF00386,"complement system, Complement C1q protein ",,0,4,2,0,2,333,5,23,9,0,0,12,41,45,27,29,30
+domains involved in pathogen recognition and clearance ,CCP,IPR000436,PF00084,Sushi/SCR/CCP,,47,119,18,51,1,108,126,82,10,13,16,248,242,55,41,50,58
+domains involved in pathogen recognition and clearance ,TSP1,IPR000884,PF00090,"complement system, Thrombospondin type 1 repeats",,18,157,196,138,17,127,42,100,30,34,18,75,157,77,63,65,67
+domains involved in pathogen recognition and clearance ,CUB ,IPR000859,PF00431,"complement system, Domains in C1r, C1s ",,6,86,41,87,9,126,71,120,40,50,28,265,246,54,46,53,57
+domains involved in pathogen recognition and clearance ,CD225,IPR007593,PF04505,Interferon-induced transmembrane protein,,25,1,21,4,0,33,17,1,0,0,0,13,9,7,6,18,15
+domains involved in pathogen recognition and clearance ,MACPF,IPR020864,PF01823,membrane-attack complex/perforin,,4,13,9,18,1,15,4,1,0,0,0,23,35,19,10,12,12
+domains involved in pathogen recognition and clearance ,Peptidase_C14,IPR011600,PF00656,Caspase,,49,22,29,14,4,31,14,39,14,5,7,42,38,22,12,12,15
+domains involved in pathogen recognition and clearance ,Cu-oxidase,IPR001117,PF00394,"Multicopper oxidase, type 1",,24,1,5,2,0,32,3,7,0,1,4,9,14,0,2,0,2
+domains of cytokines and their receptors ,IL17,IPR010345,PF06083,IL17,,0,5,0,0,0,8,3,0,0,1,0,14,7,3,4,6,6
+domains of cytokines and their receptors ,TNFR ,IPR001368,PF00020,tumor necrosis factor receptor,,1,4,1,21,3,16,15,6,2,1,2,17,32,23,18,24,26
+domains of cytokines and their receptors ,TNF ,IPR006052,PF00229,tumor necrosis factor ,,0,6,2,6,0,19,6,6,2,0,1,4,17,18,9,18,18
+domains of cytokines and their receptors ,TNF ,IPR008983,N/A,Tumour necrosis factor-like,,0,9,5,7,2,348,12,30,12,1,0,0,59,65,37,49,51
+domains of cytokines and their receptors ,EGF ,IPR006209,PF12947,Epidermal growth factor domain ,IPR024731,36,109,49,308,31,160,87,189,82,50,41,548,327,135,59,64,60
+domains mediating protein interactions ,TIR ,IPR000157,"PF01582,PF13676",Toll/IL-1 receptor domain ,,7,7,8,11,3,112,53,85,15,2,10,245,108,29,22,25,24
+domains mediating protein interactions ,CARD ,IPR001315,PF00619,Caspase Recruitment,,35,7,7,20,3,42,26,181,11,4,0,12,107,18,15,26,27
+domains mediating protein interactions ,DEATH ,IPR000488,PF00531,Death,,328,18,73,40,4,48,35,29,19,6,9,170,219,27,27,33,35
+domains mediating protein interactions ,DED ,IPR001875,PF01335,Death effector,,9,6,21,13,0,10,5,3,1,0,0,6,109,6,6,7,7
+domains mediating protein interactions ,BIR,IPR001370,PF00653,"Proteinase inhibitor I32, inhibitor of apoptosis",,6,31,3,3,2,49,17,24,4,2,4,9,12,6,6,11,8
+domains mediating protein interactions ,TRAF ,IPR008974,N/A,TRAF-like,,260,22,86,42,9,31,14,22,15,78,0,0,37,22,21,34,22
+domains mediating protein interactions ,ANK ,IPR020683,"PF11929,PF12796",Ankyrin repeat-containing domain,,1030,147,479,256,89,352,164,451,167,95,87,650,239,213,175,232,260
+domains mediating protein interactions ,TPR,IPR001440,PF00515,Tetratricopeptide repeats,,51,64,88,144,40,59,64,69,59,38,49,100,248,75,57,61,74
+domains mediating protein interactions ,WD40 ,IPR017986,N/A,WD40-repeat-containing domain,,270,264,194,241,137,236,176,238,171,116,150,290,230,210,196,233,244
+domains mediating protein interactions ,SAM,IPR010993,"PF00536,PF07647",Sterile alpha motif homology,IPR001660,62,71,52,68,20,77,39,49,42,26,0,0,75,113,98,103,114
+domains mediating protein interactions ,SPRY ,IPR003877,PF00622,domains in butyrophilin/marenostrin/pyrin,,12,19,9,19,9,21,13,17,13,12,12,19,33,120,42,79,104
+domains involved in signal transduction,SH2 ,IPR000980,PF00017,Src homology 2 domains,,94,67,29,44,33,46,24,43,60,66,32,52,32,98,82,106,109
+domains involved in signal transduction,SH3,IPR001452,"PF00018,PF07653,PF14604",Src homology 3 domains,,214,147,80,106,51,87,64,101,114,62,73,111,123,215,173,210,215
+domains involved in signal transduction,PDZ ,IPR001478,"PF00595,PF13180",PDZ/DHR/GLGF,,96,88,68,90,70,86,70,99,104,66,67,95,89,169,123,150,154
+domains involved in signal transduction,PH ,IPR001849,"PF00169,PF16652,PF16457","pleckstrin, inositol phosphate binding ",,153,137,79,118,51,110,82,112,110,72,75,117,115,243,207,254,276
+domains involved in signal transduction,PI3Kc ,IPR000403,PF00454,Phosphoinositide 3-kinase,,19,28,12,14,10,13,14,15,13,12,11,21,14,13,18,18,19
+domains involved in signal transduction,S_TKc ,IPR002290,N/A,Serine/Threonine protein kinases ,,550,431,312,266,95,335,223,331,422,163,128,425,111,563,318,401,387
+domains involved in signal transduction,Kinase_like,IPR011009,N/A,Protein kinase-like domain,,746,518,448,433,248,410,272,431,486,477,0,0,612,751,440,543,526
+domains involved in signal transduction,TyrKc ,IPR001245,PF07714,Tyrosine kinase ,,302,119,151,116,41,119,51,118,111,113,44,126,283,110,109,122,120
+domains involved in signal transduction,Y_phosphatase ,IPR000242,PF00102,"Protein tyrosine phosphatase, catalytic domain",,99,43,45,55,18,113,42,105,45,100,18,65,30,46,38,40,40
+domains involved in signal transduction,PKC-C1,IPR002219,PF00130,"protein kinase C, C1 domain ",,33,43,26,38,21,26,17,26,39,35,31,32,25,60,46,64,66
+domains involved in signal transduction,PKC-C2,IPR000008,PF00168,Protein kinase C conserved region 2 (CalB),,41,88,71,105,41,72,56,76,81,47,44,87,98,133,109,129,138
+domains involved in signal transduction,Rho,IPR003578,N/A,"Ras small GTPase, Rho type",,119,78,77,61,9,118,67,92,71,13,31,97,15,65,64,91,76
+domains involved in signal transduction,Ras,IPR003577,N/A,"Ras small GTPase, Ras type",IPR020849,129,76,91,64,5,130,76,102,81,16,34,112,18,59,68,99,87
+domains involved in signal transduction,Rab,IPR003579,N/A,"Ras small GTPase, Rab type",,159,84,116,85,22,146,90,116,94,35,48,138,40,98,84,123,110
+domains involved in signal transduction,ARF,IPR006689,PF00025,ARF/SAR superfamily,,26,27,18,26,12,38,20,23,17,14,13,24,21,41,25,30,33
+domains involved in signal transduction,zf-B_box,IPR000315,PF00643,"Zinc finger, B-box",,270,11,12,87,9,631,43,29,35,21,8,382,240,138,38,65,88
+domains involved in signal transduction,ZF_TRAF,IPR001293,"PF02176,PF15965","Zinc finger, TRAF-type",,190,5,20,26,2,16,8,9,4,2,2,10,15,15,9,11,12
+domains involved in signal transduction,IRF,IPR001346,PF00605,Interferon regulatory factor,,2,6,4,5,1,4,1,3,5,0,0,2,10,11,8,9,9
+domains involved in signal transduction,ARM-type_fold,IPR016024,N/A,Armadillo-type fold,,246,323,219,230,115,251,183,213,160,143,0,0,236,212,251,291,299
+domains involved in signal transduction,KAZAL,IPR002350,"PF00050,PF07648","Proteinase inhibitor I1, Kazal",,5,18,24,47,3,38,16,9,14,4,26,26,46,27,30,42,41
+domains involved in signal transduction,KUNITZ,IPR002223,PF00014,"Proteinase inhibitor I3, Kunitz legume",,13,7,14,20,12,27,12,39,9,38,26,8,17,15,13,20,19
+domains involved in signal transduction,serpin,IPR000215,N/A,"Protease inhibitor I4, serpin",,0,8,2,4,8,9,7,5,16,14,30,13,6,23,26,64,36

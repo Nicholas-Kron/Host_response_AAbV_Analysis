@@ -1,0 +1,13 @@
+birth_date,Dissection_Extraction_date,Age_Days,Age_Months,Age,Group,Code,Animal_ID,Weight,RNASeq_ID,Library.Name
+4/20/14,12/29/14,253,8.43,8,Mature,M,28-3,393.9,M1,Mature_1_PVC
+4/20/14,12/29/14,253,8.43,8,Mature,M,31-2,336.4,M2,Mature_2_PVC
+4/20/14,12/30/14,254,8.47,8,Mature,M,31-3,543.6,M3,Mature_3_PVC
+4/20/14,12/30/14,254,8.47,8,Mature,M,31-5,400.1,M4,Mature_4_PVC
+4/20/14,12/30/14,254,8.47,8,Mature,M,31-6,529.9,M5,Mature_5_PVC
+4/20/14,1/15/15,270,9,8,Mature,M,28-12,461.1,M6,Mature_6_PVC
+4/20/14,4/23/15,368,12.27,12,Aged,A,28-26,522.1,A1,Aged_1_PVC
+4/20/14,4/23/15,368,12.27,12,Aged,A,31-12,400.4,A2,Aged_2_PVC
+4/20/14,4/28/15,373,12.43,12,Aged,A,28-20,384.4,A3,Aged_3_PVC
+4/20/14,4/28/15,373,12.43,12,Aged,A,31-13,356,A4,Aged_4_PVC
+4/20/14,4/28/15,373,12.43,12,Aged,A,28-22,604.3,A5,Aged_5_PVC
+4/20/14,4/28/15,373,12.43,12,Aged,A,31-15,486.1,A6,Aged_6_PVC

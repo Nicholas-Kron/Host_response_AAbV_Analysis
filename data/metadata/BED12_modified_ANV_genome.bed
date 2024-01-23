@@ -1,0 +1,11 @@
+NC_040711.1	0	109	.	.	+	RefSeq	five_prime_UTR	.	ID=id-NC_040711.1:1..67;gbkey=5'UTR
+NC_040711.1	0	35948	.	.	+	RefSeq	region	.	ID=NC_040711.1:1..35906;Dbxref=taxon:2283236;collection-date=04-Jun-2011;country=USA;gbkey=Src;genome=genomic;isolate=EK;mol_type=genomic RNA
+NC_040711.1	109	17563	.	.	+	RefSeq	CDS	0	ID=cds-YP_009553215.1;Parent=gene-EXK66_gp2;Dbxref=Genbank:YP_009553215.1,GeneID:41702480;Name=YP_009553215.1;gbkey=CDS;locus_tag=EXK66_gp2;product=orf1a;protein_id=YP_009553215.1
+NC_040711.1	109	17563	.	.	+	RefSeq	gene	.	ID=gene-EXK66_gp2;Dbxref=GeneID:41702480;Name=EXK66_gp2;gbkey=Gene;gene_biotype=protein_coding;locus_tag=EXK66_gp2
+NC_040711.1	109	25240	.	.	+	RefSeq	CDS	0	ID=cds-YP_009553214.1;Parent=gene-EXK66_gp1;Dbxref=Genbank:YP_009553214.1,GeneID:41702482;Name=YP_009553214.1;Note=suppression of termination: predicted stop codon readthrough;gbkey=CDS;locus_tag=EXK66_gp1;product=orf1ab;protein_id=YP_009553214.1;transl_except=(pos:17519..17521%2Caa:Other)
+NC_040711.1	109	25240	.	.	+	RefSeq	gene	.	ID=gene-EXK66_gp1;Dbxref=GeneID:41702482;Name=EXK66_gp1;gbkey=Gene;gene_biotype=protein_coding;locus_tag=EXK66_gp1
+NC_040711.1	17564	17697	.	.	+	RefSeq	sequence_feature	.	ID=id-EXK66_gp1;Dbxref=GeneID:41702482;Note=estimated free energy: -45.17 kcal/mol;gbkey=misc_feature;locus_tag=EXK66_gp1;product=Pseudoknot
+NC_040711.1	25293	34962	.	.	+	RefSeq	CDS	0	ID=cds-YP_009553216.1;Parent=gene-EXK66_gp3;Dbxref=Genbank:YP_009553216.1,GeneID:41702481;Name=YP_009553216.1;gbkey=CDS;locus_tag=EXK66_gp3;product=putative structural polyprotein;protein_id=YP_009553216.1
+NC_040711.1	25293	34962	.	.	+	RefSeq	gene	.	ID=gene-EXK66_gp3;Dbxref=GeneID:41702481;Name=EXK66_gp3;gbkey=Gene;gene_biotype=protein_coding;locus_tag=EXK66_gp3
+NC_040711.1	34959	35948	.	.	+	RefSeq	three_prime_UTR	.	ID=id-NC_040711.1:34918..35906;gbkey=3'UTR
+NC_040711.1	35923	35924	.	.	+	RefSeq	polyA_site	.	ID=id-NC_040711.1:35882..35882;gbkey=polyA_site;zero_length_insertion=True
